@@ -5,18 +5,19 @@ it reports green while every request fails. These checks issue a real query
 against each store, so "healthy" means the thing the API actually needs is
 reachable and answering.
 
-Each probe runs on a worker thread with a wall-clock deadline. A store that has
+Each probe runs on a daemon thread with a wall-clock deadline. A store that has
 stopped answering usually does not refuse the connection — it hangs — and a
 health check that hangs with it is exactly what takes a load balancer down with
-the dependency. The deadline is what makes a hang report as a failure.
+the dependency. The deadline is what makes a hang report as a failure, and the
+thread being a daemon is what stops an abandoned probe from holding the process
+open at shutdown.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
 
 from sqlalchemy import text
@@ -27,8 +28,6 @@ logger = logging.getLogger(__name__)
 # Deliberately short. This endpoint is polled by orchestrators on a tight
 # interval; a slow answer is itself a failure signal.
 DEFAULT_TIMEOUT_SECONDS = 2.0
-
-_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="healthcheck")
 
 
 @dataclass
@@ -44,22 +43,36 @@ class DependencyStatus:
 
 
 def _timed(name: str, probe, timeout: float) -> DependencyStatus:
-    """Run ``probe`` with a deadline, converting any failure into a status."""
-    started = time.perf_counter()
-    future = _executor.submit(probe)
-    try:
-        future.result(timeout=timeout)
-    except FutureTimeout:
-        # The worker thread may still be blocked on the dependency; the request
-        # is not, which is the point. It is a daemon pool and will drain.
-        future.cancel()
-        elapsed = (time.perf_counter() - started) * 1000
-        return DependencyStatus(name, False, f"timed out after {timeout:g}s", elapsed)
-    except Exception as exc:
-        elapsed = (time.perf_counter() - started) * 1000
-        return DependencyStatus(name, False, _summarise(exc), elapsed)
+    """Run ``probe`` on a daemon thread with a deadline.
 
+    The thread must be a daemon. A pooled worker (ThreadPoolExecutor) is joined
+    by an interpreter-exit hook, so a probe still blocked on a hung store would
+    hold the whole process open at shutdown — delaying a rolling deploy for
+    exactly as long as the dependency stays wedged. A daemon thread is abandoned
+    instead: the request returns on the deadline and the process can still exit.
+    """
+    started = time.perf_counter()
+    outcome: dict = {}
+    finished = threading.Event()
+
+    def run() -> None:
+        try:
+            probe()
+            outcome["ok"] = True
+        except Exception as exc:  # noqa: BLE001 - any failure is a failed check
+            outcome["error"] = exc
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=run, name=f"healthcheck-{name}", daemon=True)
+    thread.start()
+    completed = finished.wait(timeout)
     elapsed = (time.perf_counter() - started) * 1000
+
+    if not completed:
+        return DependencyStatus(name, False, f"timed out after {timeout:g}s", elapsed)
+    if "error" in outcome:
+        return DependencyStatus(name, False, _summarise(outcome["error"]), elapsed)
     return DependencyStatus(name, True, "ok", elapsed)
 
 

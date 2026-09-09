@@ -180,3 +180,33 @@ def test_health_report_is_a_pure_function_of_the_stores():
     assert healthy is True
     assert body["status"] == "healthy"
     assert body["postgres"] == "ok" and body["neo4j"] == "ok"
+
+
+def test_a_hanging_probe_does_not_block_process_exit():
+    """Regression: probes must run on daemon threads.
+
+    A pooled worker is joined at interpreter exit, so a probe still blocked on a
+    hung store would hold the process open — wedging a rolling deploy for as
+    long as the dependency stays down, and (as first observed) adding ~29s of
+    dead time to every CI run.
+    """
+    import threading
+
+    from app.services.health import _timed
+
+    # Identity, not name: an earlier timeout test in this module has already
+    # abandoned a thread called "healthcheck-postgres", so matching on the name
+    # would find nothing new and pass vacuously.
+    before = {t.ident for t in threading.enumerate()}
+    status = _timed("postgres", lambda: time.sleep(20), 0.2)
+    assert status.ok is False
+
+    leaked = [
+        t
+        for t in threading.enumerate()
+        if t.ident not in before and t.name.startswith("healthcheck-")
+    ]
+    assert leaked, "expected the abandoned probe thread to still be running"
+    assert all(
+        t.daemon for t in leaked
+    ), "probe threads must not block interpreter exit"
