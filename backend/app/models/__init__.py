@@ -9,6 +9,7 @@ from app.models.base import Base
 from app.models.delegation import Delegation
 from app.models.event import AgentEvent, Alert
 from app.models.identity import AgentIdentity
+from app.models.incident import Incident, IncidentEvent
 
 __all__ = [
     "A2ADecision",
@@ -17,4 +18,6 @@ __all__ = [
     "Alert",
     "Base",
     "Delegation",
+    "Incident",
+    "IncidentEvent",
 ]

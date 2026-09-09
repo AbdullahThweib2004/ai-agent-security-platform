@@ -445,3 +445,98 @@ def test_user_directed_delegations_are_not_agent_to_agent(
 ):
     """analyst-1 is a person. A person directing an agent is not A2A traffic."""
     assert a2a_for(session, banking_incident["root"]) is None
+
+
+# --- containment: the incident scenario, end to end -------------------------
+def test_the_incident_contains_payment_agent(client, session, banking_incident):
+    """Pinned: the scenario crosses the threshold and the agent is suspended."""
+    from app.models.incident import Incident
+    from app.services.identity import trust_level_of
+    from app.services.incidents import is_suspended
+
+    incident = session.query(Incident).filter_by(agent_id="payment-agent").one_or_none()
+    assert incident is not None, "the attacker should have been contained"
+    assert incident.status == "open"
+    assert incident.severity == "high"
+
+    # Dated to when the agent acted, not to when the platform noticed.
+    assert incident.opened_at < incident.detected_at
+
+    layers = {e.layer for e in incident.evidence}
+    assert layers >= {"alert"}, f"expected alert evidence, got {layers}"
+
+    assert is_suspended(session, "payment-agent") is True
+    assert trust_level_of(session, "payment-agent") == "external_untrusted"
+
+
+def test_only_the_attacker_is_contained(client, session, banking_incident):
+    """No false containment of the humans or the healthy agents.
+
+    A count-based threshold opened incidents on analyst-1 — a person whose
+    delegation was refused by confinement during ordinary work — and on
+    finance-agent's cold-start blocks. Corroboration across layers and events
+    is what separates them.
+    """
+    from app.models.incident import Incident
+
+    contained = {i.agent_id for i in session.query(Incident).all()}
+    assert contained == {"payment-agent"}
+    for innocent in ("analyst-1", "finance-agent", "reconciliation-agent"):
+        assert innocent not in contained
+
+
+def test_subsequent_events_are_recorded_and_marked_not_dropped(
+    client, post_event, session, banking_incident
+):
+    from app.models.event import AgentEvent
+
+    before = session.query(AgentEvent).filter_by(actor_id="payment-agent").count()
+    body = post_event(
+        actor_id="payment-agent",
+        target_id="bank-api",
+        target_type="api",
+        action_type="api_call",
+        permissions_used=["bank:transfer"],
+        metadata={"amount": 25.0},
+        timestamp=(
+            BASE_TIME + timedelta(days=len(NORMAL_INVOICES), hours=12)
+        ).isoformat(),
+    )
+    after = session.query(AgentEvent).filter_by(actor_id="payment-agent").count()
+
+    assert after == before + 1, "containment must not create a blind spot"
+    assert body["event"]["actor_suspended"] is True
+
+
+# --- forensics now shows every layer's conclusion ---------------------------
+def test_the_timeline_shows_what_every_layer_concluded(client, banking_incident):
+    """Previously a timeline carried alerts only — about a third of the picture."""
+    handoff_id = banking_incident["handoff"]["event"]["event_id"]
+    timeline = client.get(f"/forensics/timeline/{handoff_id}").json()
+
+    entry = next(e for e in timeline["entries"] if e["event"]["event_id"] == handoff_id)
+
+    assert len(entry["alerts"]) == 3
+    assert entry["delegation"] is not None
+    assert entry["delegation"]["decision"] == "blocked"
+    assert entry["a2a_decision"] is not None
+    assert entry["a2a_decision"]["decision"] == "blocked"
+    assert entry["a2a_decision"]["rule"] == "unrated_counterparty"
+
+    assert entry["incidents"], "the event that opened the incident should say so"
+    incident_ref = entry["incidents"][0]
+    assert incident_ref["agent_id"] == "payment-agent"
+    assert incident_ref["status"] == "open"
+    assert incident_ref["layer"] in {"alert", "delegation", "a2a"}
+
+
+def test_entries_with_no_verdicts_carry_nulls_not_noise(client, banking_incident):
+    root_id = banking_incident["root"]["event"]["event_id"]
+    timeline = client.get(f"/forensics/timeline/{root_id}").json()
+    entry = next(e for e in timeline["entries"] if e["event"]["event_id"] == root_id)
+
+    # analyst-1 -> finance-agent is a delegation, so it has one of those...
+    assert entry["delegation"] is not None
+    # ...but it is user -> agent, so interaction policy never judged it.
+    assert entry["a2a_decision"] is None
+    assert entry["incidents"] == []

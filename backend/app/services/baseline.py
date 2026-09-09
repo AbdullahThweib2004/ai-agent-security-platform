@@ -138,6 +138,11 @@ def compute_baseline(
         # agent widen its own definition of normal one anomaly at a time.
         if event.platform_status in _EXCLUDED_FROM_BASELINE:
             continue
+        # Nor may an agent widen its definition of normal while contained.
+        # Without this, a suspended agent could accrue "clean" history during
+        # the suspension and emerge better-rated than it went in.
+        if event.actor_suspended:
+            continue
         baseline.event_count += 1
         baseline.known_targets.add(event.target_id)
         baseline.known_target_types.add(event.target_type)

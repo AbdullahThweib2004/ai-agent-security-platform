@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.identity import AgentIdentity
 from app.schemas.a2a import TrustLevel
+from app.services.incidents import is_suspended
 
 
 def get_identity(session: Session, agent_id: str) -> AgentIdentity | None:
@@ -25,7 +26,16 @@ def trust_level_of(session: Session, agent_id: str) -> str:
     An agent with no identity row, or one carrying no assertion, is ``unrated``.
     That is the safe default and the same answer the derived path gives, so an
     agent nobody has classified is never treated as trusted by accident.
+
+    Containment overrides everything. A suspended agent resolves as
+    ``external_untrusted`` whatever an operator previously asserted, and it does
+    so *here* rather than in each policy engine — this is the one function every
+    layer already consults about trust, so suspension reaches all of them
+    without becoming a fourth determination they could disagree about.
     """
+    if is_suspended(session, agent_id):
+        return TrustLevel.EXTERNAL_UNTRUSTED.value
+
     identity = get_identity(session, agent_id)
     if identity is None:
         return TrustLevel.UNRATED.value

@@ -5,18 +5,25 @@
 A security layer that monitors and governs autonomous AI agents inside an organization —
 their actions, tool calls, delegations, and communication with other agents.
 
-**Scope: three capabilities.**
+**Five capabilities, all complete.**
 
 1. **Agent Behavior Graph** — every agent action becomes an event; entities and their
    relationships are projected into a graph you can explore and baseline.
 2. **Agent Forensics** — reconstruct the full causal chain of any incident by walking
-   event parent/child links.
-
+   event parent/child links, with every policy layer's verdict attached.
 3. **Delegation Security** — when one agent hands work to another, decide what
    authority travels with it. A delegate receives the least privilege the task
    needs, never an automatic copy of the delegator's permission set.
+4. **A2A Security** — before that, decide whether the two agents should be
+   interacting at all, judged on identity and trust rather than on what is being
+   asked for.
+5. **Incident Response** — when independent layers agree an agent has gone wrong,
+   contain it automatically: suspend it, refuse its interactions and delegations,
+   and record why. Only a named operator lifts containment.
 
-Explicitly *not* in scope yet: A2A Security, Incident Response.
+Each layer answers a question the next one takes for granted. Interaction policy
+asks *should these two be talking*; delegation asks *what may travel between
+them*; containment asks *has this agent forfeited the right to act at all*.
 
 ---
 
@@ -102,6 +109,9 @@ Every agent action is one **Agent Event**:
 | `GET` | `/agents/{agent_id}/trust` | An agent's identity and trust level |
 | `GET` | `/a2a-decisions` | Interaction decisions, filterable by requester, target, decision |
 | `GET` | `/a2a-decisions/{decision_id}` | One decision with the trust levels it was made under |
+| `GET` | `/incidents` | Containment decisions, filterable by agent and status |
+| `GET` | `/incidents/{incident_id}` | One incident with its signals grouped by layer |
+| `POST` | `/incidents/{incident_id}/resolve` | Release a contained agent (operator action) |
 | `GET` | `/forensics/timeline/{event_id}` | Full causal chain for an event |
 | `POST` | `/events/reconcile` | Re-project events that reached Postgres but not the graph |
 | `GET` | `/health` | Liveness **and** dependency health (503 if a store is unreachable) |
@@ -200,6 +210,57 @@ an operator classification. Accepting history but not an operator's word would
 let an operator permit a conversation and still be unable to let anything travel
 through it.
 
+## Incident response (automatic containment)
+
+Three layers flag things independently. This asks whether what they have flagged
+about one agent, in one window, is enough to stop it acting.
+
+**An incident opens when, within 24 hours, an agent accumulates either:**
+
+- signals from **two or more independent layers, across two or more distinct
+  events**, or
+- **two or more high-severity alerts**.
+
+Corroboration, not volume, is the discriminator. The three layers were built to
+reason independently, so agreement between them is evidence; one layer firing
+repeatedly is usually an artefact. A count-based rule opens incidents on
+`analyst-1` — a human whose delegation was refused during ordinary work — and on
+`finance-agent`'s benign cold-start blocks. This rule fires on exactly one
+agent-day in the seeded corpus: the actual attacker.
+
+Four things the threshold deliberately does **not** do:
+
+| | Why |
+|---|---|
+| Window on ingest time | Replays and backfills land the whole history in one instant, making every agent look like a simultaneous burst and cold-start artefacts indistinguishable from a live attack. The window is measured on `agent_events.timestamp`. |
+| Attribute to the target | A block naming a counterparty is often a fact about the *actor* — `confinement` says the delegator lacks a permission — so attributing it would contain a healthy agent that merely received a refused request. |
+| Count a delegation that only cites an upstream A2A block | It relayed a conclusion rather than reaching one. Counting it makes a single finding look like two layers agreeing. |
+| Judge an unrated actor | During cold start the layers describe what the platform does not know, not what the agent did. Containment is the most severe action here, so it is the last place that should fire on absence of evidence. |
+
+### What containment does
+
+Suspension is an **override inside `trust_level_of()`**, not a parallel
+determination. A suspended agent resolves as `external_untrusted`, so every layer
+that already asks about trust picks containment up without a second question:
+interaction policy refuses it in both directions, and delegation refuses to hand
+it anything regardless of how much history it has.
+
+Its events are still **recorded and marked**, never dropped — a contained agent's
+actions are exactly the ones an investigator most wants. The marker lives on the
+event row rather than being joined from `incidents` at read time, because an
+incident's status is mutable: a join would make every event ingested during the
+suspension quietly stop looking suspended once the incident was resolved.
+Contained activity is also excluded from baselines, so an agent cannot emerge
+better-rated than it went in.
+
+### Automatic in, operator-only out
+
+Containment opens automatically; it lifts only through
+`POST /incidents/{id}/resolve` with a named operator. The asymmetry is
+deliberate. A wrong auto-suspension stops a legitimate agent until a human looks
+— visible and recoverable. A wrong auto-release lets a compromised agent resume
+silently. Fail toward the noisy error.
+
 ## Anomaly rules (rule-based only — no ML in this phase)
 
 | Rule | Fires when |
@@ -274,6 +335,11 @@ layer. After the incident the operator marks it `external_untrusted`, and its
 next probe is refused on identity alone rather than having to look anomalous all
 over again.
 
+Finally **one incident**: `payment-agent` crosses the containment threshold
+during the attack and is suspended automatically, with signals from all three
+layers recorded as evidence. Its later events are still written to the log —
+marked, not dropped — so the containment never becomes a blind spot.
+
 ## The dashboard
 
 | Page | Route | What it does |
@@ -283,6 +349,7 @@ over again.
 | Alerts | `/alerts`, `/alerts/{alert_id}` | Triage queue sorted by severity, filterable by rule and severity. The detail panel shows the evidence that produced each alert |
 | Delegations | `/delegations`, `/delegations/{id}` | Every handoff with a granted/requested ratio for at-a-glance scanning; the detail panel breaks down each requested permission, its verdict, the rule and the reason |
 | Interactions | `/interactions`, `/interactions/{id}` | Every agent-to-agent exchange with the trust levels that decided it; a delegation refused upstream links straight to the decision that refused it |
+| Incidents | `/incidents`, `/incidents/{id}` | Contained agents, with event time beside detection time, the signals grouped by layer, what was recorded while contained, and a resolve action |
 | Forensics | `/forensics`, `/forensics/{event_id}` | Top-to-bottom incident timeline, indented by causal depth, with alerts inline |
 
 Agent status has **three** states, not two:
@@ -430,7 +497,7 @@ That spins up throwaway databases on their own ports under their own Compose
 project (`aasec-test`), so it never touches the dev stack or its seeded data.
 Postgres runs on tmpfs, so every run starts from nothing.
 
-**425 tests, 99% statement coverage.**
+**495 tests, 99% statement coverage.**
 
 | Area | What is pinned |
 |---|---|
@@ -454,6 +521,9 @@ Postgres runs on tmpfs, so every run starts from nothing.
 | `tests/unit/test_a2a_policy.py` | Each interaction rule in isolation, precedence, and the rating boundary |
 | `tests/integration/test_a2a_api.py` | Both interaction routes, every filter, and that the id a delegation cites actually resolves |
 | `tests/integration/test_layering.py` | All four A2A/delegation combinations — the gate replaces only the redundant check |
+| `tests/unit/test_incident_policy.py` | The containment threshold, including a case built on replayed timestamps |
+| `tests/integration/test_incidents.py` | Detection, suspension, record-and-mark, and operator release |
+| `tests/integration/test_incidents_api.py` | Both incident routes, every filter, and a paired test that catches state leaking between runs |
 
 The suite is mutation-checked — breaking the cold-start threshold, letting
 suspicious events back into baselines, downgrading `blocked`, or swapping the
@@ -486,13 +556,45 @@ rather than assumed correct, and each gate was verified by deliberately breaking
 it: a failing assertion, an unused import, bad formatting, an unresolvable
 frontend import, and a failed job feeding the gate. All five failed the build.
 
+## Where this stands
+
+All five original phases are complete and verified end-to-end against live data
+and on CI.
+
+| Phase | Capability | Verified by |
+|---|---|---|
+| 1 | Agent Behavior Graph | 243 events projected into Postgres and Neo4j, counts agreeing across both |
+| 2 | Agent Forensics | A 4-hop root-cause trace from a leaf, surfacing a sibling branch off the direct path, with every layer's verdict attached |
+| 3 | Delegation Security | 89 decisions — 72 allowed, 13 limited, 4 blocked; least privilege visible as a reduced grant, not just a yes/no |
+| 4 | A2A Security | 67 interaction decisions; trust hybrid between derived rating and operator assertion |
+| 5 | Incident Response | One agent contained automatically on three-layer corroboration, released only by a named operator |
+
+**495 tests, 99% statement coverage**, all against real Postgres and Neo4j rather
+than mocks. Every policy engine has been mutation-tested: 9 mutations on the
+delegation rules, 7 on interaction policy, 5 on the layering, and 8 on
+containment — all caught, several only after adding the test that isolated them.
+
+### Known outstanding: migrations
+
+The schema is still created with `create_all`. That is now **six schema changes**
+deep — `graph_projected`, `delegations`, `agent_identities`, `a2a_decisions`,
+nullable identity timestamps, and `incidents` + `incident_events` — and
+`create_all` cannot alter an existing table, so each one has required a manual
+`DROP TABLE` and reseed on the dev stack.
+
+This has cost nothing so far because none of the data is worth keeping. That
+stops being true the first time this runs anywhere real, and Alembic should land
+before then. The test suite drops and rebuilds from the models on every run, so
+tests cannot drift from the schema — but that is precisely what has kept the
+problem invisible.
+
 ## Hardening summary
 
 The MVP is hardened across four areas. Each was verified rather than assumed:
 
 | | Covers | Evidence |
 |---|---|---|
-| **1. Test suite** | Unit, integration and regression tests against **real** Postgres and Neo4j | 425 tests, 99% coverage; mutation-checked — breaking the cold-start threshold, letting suspicious events into baselines, downgrading `blocked`, or swapping `MERGE` for `CREATE` each makes it fail |
+| **1. Test suite** | Unit, integration and regression tests against **real** Postgres and Neo4j | 495 tests, 99% coverage; mutation-checked — breaking the cold-start threshold, letting suspicious events into baselines, downgrading `blocked`, or swapping `MERGE` for `CREATE` each makes it fail |
 | **2. Errors & validation** | Every endpoint audited against bad input; staged-write reconciliation | 38 bad-input cases all return 4xx, none 2xx or 5xx; five real defects found and fixed; the Postgres-committed/graph-failed window asserted as a state transition and healed |
 | **3. CI** | ruff, black, full suite against pinned service containers, frontend build, behind one required gate | Green on GitHub; every gate verified by deliberately breaking it on a throwaway branch |
 | **4. Observability** | JSON structured logging across the ingest path; real dependency health checks | Logs verified on a live stack; `/health` returns 503 in ~18ms naming the specific dead store; tests assert sensitive metadata never reaches logs |
@@ -518,3 +620,4 @@ Known limitations, recorded rather than hidden:
 - [x] Hardening 4 — structured JSON logging and real dependency health checks
 - [x] Phase 3 — Delegation Security (policy engine, API, tests, UI)
 - [x] Phase 4 — A2A Security (identity & trust, interaction policy, layering, API, UI)
+- [x] Phase 5 — Incident Response (containment threshold, suspension, resolve, API, UI)

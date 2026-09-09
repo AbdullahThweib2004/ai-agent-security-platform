@@ -462,7 +462,11 @@ def test_an_untrusted_classification_does_not_satisfy_the_rating_rule():
         "fx:read", delegator, delegate, delegate_trust="external_untrusted"
     )
     assert verdict.decision == BLOCKED
-    assert verdict.rule == "unrated_delegate"
+    # Since Phase 5 this is attributed to the more precise rule: an untrusted
+    # (or contained) delegate is refused whatever its history, which the rating
+    # rule alone could not express — an agent with plenty of history would have
+    # passed it.
+    assert verdict.rule == "untrusted_delegate"
 
 
 def test_an_upstream_block_replaces_only_the_rating_rule():

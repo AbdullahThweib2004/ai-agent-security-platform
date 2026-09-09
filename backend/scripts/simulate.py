@@ -451,7 +451,12 @@ def reset() -> None:
     with session_scope() as session:
         # agent_identities has no foreign key to agent_events, so the cascade
         # does not reach it and it must be named explicitly.
-        session.execute(text("TRUNCATE agent_events, alerts, agent_identities CASCADE"))
+        # Neither agent_identities nor incidents has a foreign key to
+        # agent_events, so the cascade reaches neither. An open incident left
+        # behind would suspend that agent for everything that ran afterwards.
+        session.execute(
+            text("TRUNCATE agent_events, alerts, agent_identities, incidents CASCADE")
+        )
     with get_driver().session() as neo:
         neo.run("MATCH (n) DETACH DELETE n")
     print("  cleared postgres and neo4j")

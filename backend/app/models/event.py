@@ -77,6 +77,19 @@ class AgentEvent(Base):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
 
+    # Whether the actor was under containment when this event arrived.
+    #
+    # Recorded on the row rather than joined from `incidents` at read time, and
+    # deliberately: an incident's status is mutable, so a join would report
+    # current state. Resolve the incident tomorrow and every event ingested
+    # during the suspension would silently stop looking suspended — the record
+    # would change its account of the past. This is the same reasoning that
+    # snapshots trust levels onto a2a_decisions and freezes alert evidence at
+    # trigger time.
+    actor_suspended: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+
     parent_event_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("agent_events.event_id", ondelete="SET NULL"),
@@ -111,6 +124,11 @@ class AgentEvent(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    incident_links = relationship(
+        "IncidentEvent",
+        back_populates="event",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         Index("ix_agent_events_actor_id", "actor_id"),
@@ -120,6 +138,13 @@ class AgentEvent(Base):
         # serves that access pattern directly.
         Index("ix_agent_events_actor_timestamp", "actor_id", "timestamp"),
         Index("ix_agent_events_target_id", "target_id"),
+        # Almost always false, so a partial index stays small however large the
+        # log grows — the same shape as ix_agent_events_unprojected.
+        Index(
+            "ix_agent_events_actor_suspended",
+            "actor_suspended",
+            postgresql_where=text("actor_suspended = true"),
+        ),
         # The reconciler seeks on this; it is almost always empty, so a partial
         # index keeps it tiny no matter how large the log grows.
         Index(

@@ -101,7 +101,9 @@ _WRITE_VERBS = ("write", "create", "update", "delete", "modify", "execute", "ini
 _RULE_PRECEDENCE = {
     "confinement": 0,
     "sensitive_category": 1,
-    "unrated_delegate": 2,
+    "untrusted_delegate": 2,
+    "unrated_delegate": 3,
+    "upstream_a2a_block": 4,
 }
 
 
@@ -293,6 +295,29 @@ def _rule_sensitive_category(
     )
 
 
+def _rule_untrusted_delegate(
+    permission: str, delegate: AgentBaseline, delegate_trust: str
+) -> PermissionVerdict | None:
+    """A delegate classified untrusted — or suspended — receives nothing.
+
+    Failing the "vouched for" check below is not sufficient on its own: that
+    rule lets an agent through on accrued history, and a suspended agent has
+    plenty of history. Containment has to refuse regardless of how much.
+    """
+    if delegate_trust != TrustLevel.EXTERNAL_UNTRUSTED.value:
+        return None
+    return PermissionVerdict(
+        permission=permission,
+        decision=PermissionDecision.BLOCKED.value,
+        rule="untrusted_delegate",
+        reason=(
+            f"{delegate.agent_id} is classified external_untrusted; no authority "
+            "may be delegated to it whatever its history"
+        ),
+        granted_as=None,
+    )
+
+
 def _rule_unrated_delegate(
     permission: str, delegate: AgentBaseline, delegate_trust: str = "unrated"
 ) -> PermissionVerdict | None:
@@ -363,16 +388,23 @@ def decide_permission(
     # permissions it does not. Only the third rule is replaced, because
     # "the counterparty cannot be vouched for" is precisely what A2A already
     # said — re-deriving it would be the same finding twice under two names.
-    third_rule = (
-        (lambda: _rule_upstream_block(permission, upstream))
+    # When interaction policy already refused, its citation replaces the
+    # counterparty checks below — they would restate the same conclusion. When
+    # it did not, both run: untrusted first, because containment refuses
+    # regardless of history, and only then the rating check.
+    counterparty_rules = (
+        (lambda: _rule_upstream_block(permission, upstream),)
         if upstream is not None
-        else (lambda: _rule_unrated_delegate(permission, delegate, delegate_trust))
+        else (
+            lambda: _rule_untrusted_delegate(permission, delegate, delegate_trust),
+            lambda: _rule_unrated_delegate(permission, delegate, delegate_trust),
+        )
     )
 
     for rule in (
         lambda: _rule_confinement(permission, delegator),
         lambda: _rule_sensitive_category(permission, delegator),
-        third_rule,
+        *counterparty_rules,
     ):
         finding = rule()
         if finding is None:

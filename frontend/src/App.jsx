@@ -4,6 +4,7 @@ import GraphPage from './pages/GraphPage'
 import Alerts from './pages/Alerts'
 import Delegations from './pages/Delegations'
 import Interactions from './pages/Interactions'
+import Incidents from './pages/Incidents'
 import Forensics from './pages/Forensics'
 
 const Placeholder = ({ name }) => (
@@ -15,6 +16,7 @@ const Placeholder = ({ name }) => (
 
 const tabs = [
   { to: '/', label: 'Agents', end: true },
+  { to: '/incidents', label: 'Incidents' },
   { to: '/graph', label: 'Behavior Graph' },
   { to: '/alerts', label: 'Alerts' },
   { to: '/delegations', label: 'Delegations' },
@@ -64,6 +66,8 @@ export default function App() {
           <Route path="/delegations/:delegationId" element={<Delegations />} />
           <Route path="/interactions" element={<Interactions />} />
           <Route path="/interactions/:decisionId" element={<Interactions />} />
+          <Route path="/incidents" element={<Incidents />} />
+          <Route path="/incidents/:incidentId" element={<Incidents />} />
           <Route path="/forensics" element={<Forensics />} />
           <Route path="/forensics/:eventId" element={<Forensics />} />
         </Routes>

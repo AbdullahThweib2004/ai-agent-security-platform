@@ -23,6 +23,7 @@ from app.routers import (
     events,
     forensics,
     graph,
+    incidents,
 )
 from app.schemas.health import HealthResponse
 from app.services.health import health_report
@@ -123,6 +124,7 @@ app.include_router(graph.router)
 app.include_router(alerts.router)
 app.include_router(delegations.router)
 app.include_router(a2a.router)
+app.include_router(incidents.router)
 app.include_router(forensics.router)
 
 

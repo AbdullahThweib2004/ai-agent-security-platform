@@ -16,9 +16,14 @@ from uuid import UUID
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.models.a2a import A2ADecision
+from app.models.delegation import Delegation
 from app.models.event import AgentEvent, Alert
+from app.models.incident import Incident, IncidentEvent
+from app.schemas.a2a import A2ADecisionOut
+from app.schemas.delegation import DelegationOut
 from app.schemas.event import AlertOut, event_to_out
-from app.schemas.forensics import TimelineEntry, TimelineResponse
+from app.schemas.forensics import IncidentRef, TimelineEntry, TimelineResponse
 
 # Guards the recursion. A cycle cannot normally form (a parent must already
 # exist before a child can reference it) but the log is evidence, and evidence
@@ -96,6 +101,39 @@ def build_timeline(session: Session, event_id: UUID) -> TimelineResponse | None:
     for alert in session.scalars(select(Alert).where(Alert.event_id.in_(all_ids))):
         alerts_by_event.setdefault(alert.event_id, []).append(alert)
 
+    # Every layer's conclusion about each event, gathered in one query apiece
+    # rather than per entry — a chain can be long, and an N+1 here would grow
+    # with the incident.
+    delegation_by_event = {
+        d.event_id: d
+        for d in session.scalars(
+            select(Delegation).where(Delegation.event_id.in_(all_ids))
+        )
+    }
+    a2a_by_event = {
+        d.event_id: d
+        for d in session.scalars(
+            select(A2ADecision).where(A2ADecision.event_id.in_(all_ids))
+        )
+    }
+
+    incidents_by_event: dict[UUID, list[IncidentRef]] = {}
+    links = session.execute(
+        select(IncidentEvent, Incident)
+        .join(Incident, Incident.incident_id == IncidentEvent.incident_id)
+        .where(IncidentEvent.event_id.in_(all_ids))
+    ).all()
+    for link, incident in links:
+        incidents_by_event.setdefault(link.event_id, []).append(
+            IncidentRef(
+                incident_id=incident.incident_id,
+                agent_id=incident.agent_id,
+                status=incident.status,
+                layer=link.layer,
+                detail=link.detail,
+            )
+        )
+
     def relation_of(eid: UUID) -> str:
         if eid == event_id:
             return "self"
@@ -113,6 +151,17 @@ def build_timeline(session: Session, event_id: UUID) -> TimelineResponse | None:
             alerts=[
                 AlertOut.model_validate(a) for a in alerts_by_event.get(e.event_id, [])
             ],
+            delegation=(
+                DelegationOut.model_validate(delegation_by_event[e.event_id])
+                if e.event_id in delegation_by_event
+                else None
+            ),
+            a2a_decision=(
+                A2ADecisionOut.model_validate(a2a_by_event[e.event_id])
+                if e.event_id in a2a_by_event
+                else None
+            ),
+            incidents=incidents_by_event.get(e.event_id, []),
         )
         for e in events
     ]

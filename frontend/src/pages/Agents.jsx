@@ -3,16 +3,22 @@ import StatTile from '../components/StatTile'
 import StatusBadge from '../components/StatusBadge'
 import { Empty, ErrorState, Loading } from '../components/States'
 import { useFetch } from '../hooks/useFetch'
-import { getGraph } from '../lib/api'
+import { getGraph, getIncidents } from '../lib/api'
 import { ENTITY_ICON, compactNumber, relativeTime } from '../lib/format'
 
 export default function Agents() {
   const { data, error, loading, reload } = useFetch(getGraph, [])
+  // The graph knows behaviour; it does not know containment. Merging the two
+  // here is what lets this page say "suspended" rather than only "suspicious".
+  const { data: incidents } = useFetch(() => getIncidents({ limit: 200 }), [])
 
   if (loading) return <Loading label="Loading agents" />
   if (error) return <ErrorState message={error} onRetry={reload} />
 
   const nodes = data?.nodes ?? []
+  const containedBy = Object.fromEntries(
+    (incidents ?? []).filter((i) => i.is_suspended).map((i) => [i.agent_id, i])
+  )
   const agents = nodes
     .filter((n) => n.type === 'agent')
     .sort((a, b) => {
@@ -55,7 +61,17 @@ export default function Agents() {
           icon={stats.suspicious_node_count ? '▲' : '✓'}
           note={stats.suspicious_node_count ? 'needs review' : 'all clear'}
         />
-        <StatTile label="Open alerts" value={totalAlerts} tone={totalAlerts ? 'warning' : 'neutral'} />
+        <StatTile
+          label="Agents contained"
+          value={Object.keys(containedBy).length}
+          tone={Object.keys(containedBy).length ? 'critical' : 'good'}
+          icon={Object.keys(containedBy).length ? '⊘' : '✓'}
+          note={
+            Object.keys(containedBy).length
+              ? 'suspended — activity still recorded'
+              : 'none suspended'
+          }
+        />
         <StatTile label="Actions observed" value={totalActions} note={`${stats.edge_count ?? 0} relationships`} />
       </div>
 
@@ -99,7 +115,17 @@ export default function Agents() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <StatusBadge kind="health" value={a.health} />
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <StatusBadge kind="health" value={a.health} />
+                      {containedBy[a.id] && (
+                        <Link
+                          to={`/incidents/${containedBy[a.id].incident_id}`}
+                          title="Contained: its events are still recorded, but marked"
+                        >
+                          <StatusBadge kind="incident" value="open" size="sm" />
+                        </Link>
+                      )}
+                    </div>
                   </td>
                   <td className="tabular px-4 py-3 text-right">
                     {a.alert_count > 0 ? (

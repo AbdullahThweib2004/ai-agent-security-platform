@@ -152,6 +152,12 @@ class AgentEventOut(AgentEventBase):
         description="This platform's verdict after the rules ran. Read this "
         "field to determine suspicion."
     )
+    actor_suspended: bool = Field(
+        default=False,
+        description="Whether the actor was under containment when this event "
+        "arrived. Recorded at ingest, so it does not change if the incident is "
+        "later resolved.",
+    )
 
 
 class AlertOut(BaseModel):
@@ -192,6 +198,7 @@ def event_to_out(event) -> AgentEventOut:
         permissions_used=list(event.permissions_used or []),
         reported_status=event.reported_status,
         platform_status=event.platform_status,
+        actor_suspended=event.actor_suspended,
         metadata=dict(event.event_metadata or {}),
         parent_event_id=event.parent_event_id,
     )

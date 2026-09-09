@@ -47,7 +47,12 @@ def _clean_stores():
         # agent_identities has no foreign key to agent_events, so it is not
         # reached by the cascade and must be named explicitly — otherwise an
         # operator trust assertion in one test leaks into every later one.
-        session.execute(text("TRUNCATE agent_events, alerts, agent_identities CASCADE"))
+        # Neither agent_identities nor incidents has a foreign key to
+        # agent_events, so the cascade reaches neither. An open incident left
+        # behind would suspend that agent for everything that ran afterwards.
+        session.execute(
+            text("TRUNCATE agent_events, alerts, agent_identities, incidents CASCADE")
+        )
         session.commit()
     with get_driver().session() as neo:
         neo.run("MATCH (n) DETACH DELETE n")

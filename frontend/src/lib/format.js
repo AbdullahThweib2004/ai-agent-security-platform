@@ -36,6 +36,15 @@ export function clockTime(iso) {
   })
 }
 
+export function duration(seconds) {
+  if (seconds === null || seconds === undefined) return '—'
+  const s = Math.max(0, seconds)
+  if (s < 60) return `${Math.round(s)}s`
+  if (s < 3600) return `${Math.round(s / 60)}m`
+  if (s < 86400) return `${(s / 3600).toFixed(1)}h`
+  return `${(s / 86400).toFixed(1)}d`
+}
+
 export function relativeTime(iso) {
   if (!iso) return '—'
   const then = new Date(iso).getTime()

@@ -34,8 +34,13 @@ from app.schemas.event import (
     IngestResponse,
     event_to_out,
 )
-from app.services import a2a_policy, delegation_policy
+from app.services import (
+    a2a_policy,
+    delegation_policy,
+    incident_policy,
+)
 from app.services import identity as identity_service
+from app.services import incidents as incidents_service
 from app.services.anomaly import evaluate
 from app.services.baseline import compute_baseline
 from app.services.reconcile import reconcile as run_reconcile
@@ -145,9 +150,27 @@ def ingest_event(
         platform_status=payload.reported_status.value,
         event_metadata=payload.metadata,
         parent_event_id=payload.parent_event_id,
+        # Record-and-mark. A contained agent's events are still written — they
+        # are exactly the events an investigator most wants — but the row
+        # carries what was true at ingest, so resolving the incident later
+        # cannot make this event stop looking suspended.
+        actor_suspended=incidents_service.is_suspended(session, payload.actor_id),
     )
     session.add(event)
     session.flush()
+
+    if event.actor_suspended:
+        logger.warning(
+            "event recorded from a contained agent",
+            extra={
+                "event": "event.ingest.from_suspended_agent",
+                "event_id": str(event.event_id),
+                "actor_id": event.actor_id,
+                "target_id": event.target_id,
+                "action_type": event.action_type,
+                "recorded": True,
+            },
+        )
 
     # Identity maintenance, before any policy runs. Every agent the platform
     # observes gets a row, so trust has something to attach to and first/last
@@ -316,6 +339,26 @@ def ingest_event(
                 "requested_count": len(verdict.requested_permissions),
                 "granted_count": len(verdict.granted_permissions),
                 "rules_applied": sorted({v.rule for v in verdict.verdicts}),
+            },
+        )
+
+    # Containment runs last of the four policy layers, because it reasons over
+    # what the other three just concluded — including about this very event.
+    # Fourth consumer of the same ingest path, not a fourth pipeline.
+    incident = incident_policy.evaluate(session, event)
+    if incident is not None:
+        logger.error(
+            "agent contained: independent signals crossed the incident threshold",
+            extra={
+                "event": "incident.opened",
+                "incident_id": str(incident.incident_id),
+                "agent_id": incident.agent_id,
+                "severity": incident.severity,
+                "opened_at": incident.opened_at.isoformat(),
+                "alert_worthy": True,
+                "suspended": True,
+                "layers": incident.trigger_summary.get("layers", []),
+                "signal_count": incident.trigger_summary.get("signal_count"),
             },
         )
 

@@ -51,7 +51,16 @@ const TRUST = {
   unrated: { label: 'Unrated', icon: '?', cls: 'text-status-serious border-status-serious/40 bg-status-serious/10' },
 }
 
+// A lifecycle rather than a verdict, so the colours read as urgency: an open
+// incident is containing an agent right now; resolved is settled, not "good".
+const INCIDENT = {
+  open: { label: 'Open', icon: '⊘', cls: 'text-status-critical border-status-critical/40 bg-status-critical/10' },
+  contained: { label: 'Contained', icon: '◆', cls: 'text-status-warning border-status-warning/40 bg-status-warning/10' },
+  resolved: { label: 'Resolved', icon: '✓', cls: 'text-ink-muted border-edge bg-raised' },
+}
+
 const SETS = {
+  incident: INCIDENT,
   health: HEALTH,
   severity: SEVERITY,
   status: PLATFORM_STATUS,
