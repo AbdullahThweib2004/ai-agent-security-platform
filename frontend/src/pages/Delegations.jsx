@@ -185,7 +185,6 @@ export default function Delegations() {
               const active = row.delegation_id === selectedId
               const requested = row.requested_permissions?.length ?? 0
               const granted = row.granted_permissions?.length ?? 0
-              const cut = requested - granted
               return (
                 <li key={row.delegation_id}>
                   <button
@@ -208,20 +207,26 @@ export default function Delegations() {
                         {row.reason}
                       </span>
                     </span>
-                    {/* At-a-glance signal: how much authority was withheld. */}
+                    {/* At-a-glance signal: how much authority was withheld.
+                        Coloured by the decision, not by the count. A reduced
+                        permission still counts as granted, so 1/1 in green
+                        would claim nothing was cut when the form was
+                        downgraded. */}
                     <span className="tabular whitespace-nowrap text-right text-xs">
                       <span
                         className={
-                          cut === 0
+                          row.decision === 'allowed'
                             ? 'text-status-good'
-                            : granted === 0
+                            : row.decision === 'blocked'
                               ? 'text-status-critical'
                               : 'text-status-warning'
                         }
                       >
                         {granted}/{requested}
                       </span>
-                      <span className="block text-[11px] text-ink-faint">granted</span>
+                      <span className="block text-[11px] text-ink-faint">
+                        {row.decision === 'limited' ? 'reduced' : 'granted'}
+                      </span>
                     </span>
                     <span className="whitespace-nowrap text-xs text-ink-faint">
                       {relativeTime(row.decided_at)}

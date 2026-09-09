@@ -187,9 +187,17 @@ payment-agent → bank-api, plus reconciliation runs) and then one chained
 incident: an 880,000 payment approved out of nowhere, handed off to an
 `external-agent-x` nobody has ever contacted, alongside a bulk read of the
 customer database, with the funds finally leaving via `offshore-api`. It seeds
-**214 events raising exactly 6 alerts** — the 208 normal events raise none, so
+**228 events raising exactly 6 alerts** — the 222 normal events raise none, so
 the incident is not buried in noise. The script prints a ready-to-run
 `/forensics/timeline/...` URL for the incident when it finishes.
+
+It also seeds **89 delegation decisions — 71 allowed, 12 limited, 6 blocked** —
+so all three least-privilege outcomes are visible without constructing anything
+by hand. The daily `finance-agent → reconciliation-agent` handoff is the one to
+look at: it asks for `db:write_payment` every day and the answer changes as the
+delegate earns a history — refused on day one because finance-agent does not yet
+hold the permission, refused on day two because the delegate is still unrated,
+and from day three granted `db:read_payment` instead of the write it asked for.
 
 ## The dashboard
 
@@ -346,7 +354,7 @@ That spins up throwaway databases on their own ports under their own Compose
 project (`aasec-test`), so it never touches the dev stack or its seeded data.
 Postgres runs on tmpfs, so every run starts from nothing.
 
-**298 tests, 98% statement coverage.**
+**302 tests, 98% statement coverage.**
 
 | Area | What is pinned |
 |---|---|
@@ -405,7 +413,7 @@ The MVP is hardened across four areas. Each was verified rather than assumed:
 
 | | Covers | Evidence |
 |---|---|---|
-| **1. Test suite** | Unit, integration and regression tests against **real** Postgres and Neo4j | 298 tests, 98% coverage; mutation-checked — breaking the cold-start threshold, letting suspicious events into baselines, downgrading `blocked`, or swapping `MERGE` for `CREATE` each makes it fail |
+| **1. Test suite** | Unit, integration and regression tests against **real** Postgres and Neo4j | 302 tests, 98% coverage; mutation-checked — breaking the cold-start threshold, letting suspicious events into baselines, downgrading `blocked`, or swapping `MERGE` for `CREATE` each makes it fail |
 | **2. Errors & validation** | Every endpoint audited against bad input; staged-write reconciliation | 38 bad-input cases all return 4xx, none 2xx or 5xx; five real defects found and fixed; the Postgres-committed/graph-failed window asserted as a state transition and healed |
 | **3. CI** | ruff, black, full suite against pinned service containers, frontend build, behind one required gate | Green on GitHub; every gate verified by deliberately breaking it on a throwaway branch |
 | **4. Observability** | JSON structured logging across the ingest path; real dependency health checks | Logs verified on a live stack; `/health` returns 503 in ~18ms naming the specific dead store; tests assert sensitive metadata never reaches logs |

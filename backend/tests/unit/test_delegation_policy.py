@@ -236,6 +236,43 @@ def test_egress_is_refused_even_when_a_reduced_form_is_held():
     assert verdict.granted_as is None
 
 
+def test_an_explicitly_categorised_permission_is_reduced_not_passed_on():
+    """The case the seeded demo depends on: db:write_payment -> db:read_payment.
+
+    No keyword in the name says "money movement", so it is classified by exact
+    name. Widening a keyword to reach it would be the wrong tool — adding
+    "payment" to the money_movement family would also capture
+    `finance:request_payment`, which has no reduced form and is delegated on the
+    ordinary invoice path, so the policy would block the primary workflow.
+    """
+    delegator = agent(permissions=["db:write_payment", "db:read_payment"])
+    verdict = decide_permission("db:write_payment", delegator, rated())
+
+    assert categorise("db:write_payment") == "money_movement"
+    assert verdict.decision == LIMITED
+    assert verdict.rule == "sensitive_category"
+    assert verdict.granted_as == "db:read_payment"
+
+
+def test_the_reduced_form_is_not_itself_treated_as_unsafe():
+    """A reduction the policy grants cannot be one it considers unsafe to grant.
+
+    If db:read_payment were also classified sensitive, the substitution above
+    would be incoherent — handing over something the policy would itself refuse.
+    """
+    assert categorise("db:read_payment") is None
+
+
+@pytest.mark.parametrize("permission", ["finance:request_payment", "payments:initiate"])
+def test_the_ordinary_invoice_permissions_stay_unclassified(permission):
+    """Regression guard on blast radius.
+
+    These two are delegated on every invoice run. Classifying either as
+    sensitive would block the workflow the platform exists to observe.
+    """
+    assert categorise(permission) is None
+
+
 def test_customer_data_is_never_auto_granted_even_when_held():
     delegator = agent(permissions=["db:read_pii", "db:read_masked"])
     verdict = decide_permission("db:read_pii", delegator, rated())

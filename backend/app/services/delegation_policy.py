@@ -65,6 +65,19 @@ SENSITIVE_CATEGORIES: dict[str, re.Pattern] = {
     "egress": re.compile(_SEGMENT.format(r"(?:egress|external|exfil|upload)"), re.I),
 }
 
+# Specific permissions the keyword families do not catch. Widening a keyword to
+# reach them is the wrong tool: adding "payment" to money_movement would also
+# capture `finance:request_payment`, which has no reduced form and is delegated
+# on the ordinary invoice path — the policy would block the primary workflow to
+# classify one permission correctly.
+#
+# Note what is deliberately absent: `db:read_payment`. It is the safe reduction
+# of the write, and a reduction the policy grants cannot itself be a permission
+# the policy considers unsafe to grant.
+EXPLICIT_CATEGORIES: dict[str, str] = {
+    "db:write_payment": "money_movement",
+}
+
 # Categories with no safe reduced form: there is no "read-only" version of
 # administrative control or of moving money out of the building.
 NO_SAFE_REDUCTION = frozenset({"administrative", "egress"})
@@ -152,7 +165,13 @@ def extract_requested_permissions(event) -> list[str]:
 
 
 def categorise(permission: str) -> str | None:
-    """The sensitive category a permission falls into, if any."""
+    """The sensitive category a permission falls into, if any.
+
+    Exact names are checked before keyword families, so a permission whose name
+    does not advertise what it touches can still be classified.
+    """
+    if permission in EXPLICIT_CATEGORIES:
+        return EXPLICIT_CATEGORIES[permission]
     for name, pattern in SENSITIVE_CATEGORIES.items():
         if pattern.search(permission):
             return name

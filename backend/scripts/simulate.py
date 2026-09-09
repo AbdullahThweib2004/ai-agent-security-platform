@@ -14,6 +14,12 @@ A bank runs three agents. Over two weeks of normal operation:
 Vendor invoices run 800-15,000 USD. Everyone stays inside their lane. This
 establishes the baselines the rules need in order to have an opinion.
 
+Once a day finance-agent also books the run into the payments ledger and hands
+the reconciliation agent the write permission for it. That handoff is the
+least-privilege case: reconciliation-agent is refused outright while it is still
+unrated, and once it has a history it is granted db:read_payment instead of the
+db:write_payment it asked for.
+
 Then, on the last day, three things go wrong — each one exercising a different
 rule, and all three chained to a single legitimate-looking request so the
 forensics timeline has a real incident to reconstruct:
@@ -191,6 +197,39 @@ def seed_normal(start: datetime, days: int = 14) -> int:
                 parent=event_id(request),
             )
             count += 1
+
+            if run == 0:
+                # Once a day finance-agent hands the reconciliation agent the
+                # ledger write, and this is the least-privilege case: the write
+                # is refused and the read granted in its place.
+                #
+                # The permissions ride on this event rather than on a separate
+                # payments-db write, and that is a constraint of the platform
+                # rather than a stylistic choice. An agent gets exactly
+                # MIN_BASELINE_EVENTS (3) counterparty introductions before the
+                # rules start judging it; finance-agent already spends two on
+                # fx-rate-tool and payment-agent. A fourth counterparty would
+                # trip unseen_counterparty, and because a flagged event is then
+                # excluded from the baseline, the agent it was reaching never
+                # enters the baseline at all — so every later handoff to it
+                # trips the same rule again. One misplaced event cascades.
+                #
+                # Emitted second, while finance-agent still has one clean event,
+                # so reconciliation-agent is introduced before judging begins.
+                emit(
+                    FINANCE,
+                    RECON,
+                    "delegation",
+                    # Exercised here, which is how finance-agent comes to hold
+                    # the pair: the write it is passing on, and the read the
+                    # policy will substitute for it.
+                    permissions=["db:write_payment", "db:read_payment"],
+                    requested=["db:write_payment"],
+                    at=at + timedelta(seconds=30),
+                    metadata={"purpose": "nightly reconciliation", "invoice": invoice},
+                    parent=event_id(request),
+                )
+                count += 1
 
             approve = emit(
                 FINANCE,
