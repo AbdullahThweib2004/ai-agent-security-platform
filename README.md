@@ -1,5 +1,7 @@
 # AI Agent Security & Control Platform
 
+[![CI](https://github.com/AbdullahThweib2004/ai-agent-security-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/AbdullahThweib2004/ai-agent-security-platform/actions/workflows/ci.yml)
+
 A security layer that monitors and governs autonomous AI agents inside an organization —
 their actions, tool calls, delegations, and communication with other agents.
 
