@@ -14,12 +14,14 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from app.config import get_settings
 from app.db.neo4j import close_driver, init_constraints, verify_connectivity
 from app.db.postgres import init_db
+from app.logging_config import configure_logging
 from app.routers import alerts, events, forensics, graph
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from app.schemas.health import HealthResponse
+from app.services.health import health_report
 
 settings = get_settings()
+configure_logging(level=settings.log_level, fmt=settings.log_format)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -113,6 +115,25 @@ app.include_router(alerts.router)
 app.include_router(forensics.router)
 
 
-@app.get("/health", tags=["meta"])
-def health() -> dict:
-    return {"status": "ok", "app": settings.app_name}
+@app.get(
+    "/health",
+    tags=["meta"],
+    response_model=HealthResponse,
+    summary="Liveness and dependency health",
+    responses={
+        503: {
+            "model": HealthResponse,
+            "description": "At least one backing store is unreachable",
+        }
+    },
+)
+def health() -> JSONResponse:
+    """Verify that the API can actually reach the stores it depends on.
+
+    Each dependency is reported individually, so a caller can tell *which* one
+    is down rather than only that something is. Returns 503 if either is
+    unreachable, so an orchestrator can act on it without parsing the body.
+    """
+    body, healthy = health_report(timeout=settings.health_timeout_seconds)
+    body["app"] = settings.app_name
+    return JSONResponse(status_code=200 if healthy else 503, content=body)

@@ -44,6 +44,15 @@ def reconcile(session: Session, limit: int = 500) -> dict:
     repaired: list[str] = []
     failed: list[dict] = []
 
+    logger.info(
+        "reconcile started",
+        extra={
+            "event": "reconcile.started",
+            "backlog_size": len(pending),
+            "limit": limit,
+        },
+    )
+
     driver = get_driver()
     for event in pending:
         try:
@@ -69,14 +78,55 @@ def reconcile(session: Session, limit: int = 500) -> dict:
             event.graph_projected = True
             session.commit()
             repaired.append(str(event.event_id))
+            logger.info(
+                "event re-projected",
+                extra={
+                    "event": "reconcile.event.repaired",
+                    "event_id": str(event.event_id),
+                    "actor_id": event.actor_id,
+                    "target_id": event.target_id,
+                },
+            )
         except Exception as exc:
             session.rollback()
-            logger.exception(
-                "reconcile failed for event %s",
-                event.event_id,
-                extra={"event_id": str(event.event_id)},
+            # Quarantined: durable in Postgres, still absent from the graph, and
+            # retried on every subsequent pass. Logged at ERROR with an explicit
+            # flag because a graph quietly missing events is a security tool
+            # lying by omission.
+            logger.error(
+                "RECONCILE QUARANTINE: event could not be projected and remains "
+                "invisible in the behavior graph",
+                exc_info=True,
+                extra={
+                    "event": "reconcile.event.quarantined",
+                    "quarantined": True,
+                    "alert_worthy": True,
+                    "event_id": str(event.event_id),
+                    "actor_id": event.actor_id,
+                    "target_id": event.target_id,
+                    "action_type": event.action_type,
+                    "postgres_write": "committed",
+                    "neo4j_write": "failed",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:300],
+                },
             )
             failed.append({"event_id": str(event.event_id), "error": str(exc)})
+
+    summary = {
+        "event": "reconcile.completed",
+        "backlog_size": len(pending),
+        "repaired": len(repaired),
+        "quarantined": len(failed),
+        "quarantined_event_ids": [f["event_id"] for f in failed],
+    }
+    if failed:
+        logger.error(
+            "reconcile completed with quarantined events",
+            extra={**summary, "alert_worthy": True},
+        )
+    else:
+        logger.info("reconcile completed", extra=summary)
 
     return {
         "pending": len(pending),

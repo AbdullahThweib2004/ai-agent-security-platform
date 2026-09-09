@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.db.neo4j import get_driver, project_event
 from app.db.postgres import get_session
 from app.models.event import AgentEvent, Alert
+from app.schemas.alert import AlertRule
 from app.schemas.errors import (
     BAD_REQUEST,
     CONFLICT,
@@ -36,6 +37,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/events", tags=["events"])
 
+# Every rule the detector runs, for the "which rules ran" log line.
+ALL_RULE_NAMES = [rule.value for rule in AlertRule]
+
 
 @router.post(
     "",
@@ -57,7 +61,30 @@ def ingest_event(
     MERGE-based, replaying an event after a crash converges rather than
     duplicating.
     """
+    log_context = {
+        "event": "event.ingest.received",
+        "event_id": str(payload.event_id),
+        "actor_id": payload.actor_id,
+        "actor_type": payload.actor_type.value,
+        "target_id": payload.target_id,
+        "target_type": payload.target_type.value,
+        "action_type": payload.action_type.value,
+        "reported_status": payload.reported_status.value,
+        # Counts, not contents: the permissions themselves live in Postgres.
+        "permission_count": len(payload.permissions_used),
+        "has_parent": payload.parent_event_id is not None,
+    }
+    logger.info("event received", extra=log_context)
+
     if session.get(AgentEvent, payload.event_id) is not None:
+        logger.warning(
+            "event rejected: duplicate",
+            extra={
+                **log_context,
+                "event": "event.ingest.rejected",
+                "reason": "duplicate",
+            },
+        )
         raise HTTPException(
             status_code=http_status.HTTP_409_CONFLICT,
             detail=f"event {payload.event_id} already ingested",
@@ -65,6 +92,14 @@ def ingest_event(
 
     if payload.parent_event_id is not None:
         if payload.parent_event_id == payload.event_id:
+            logger.warning(
+                "event rejected: self-referencing parent",
+                extra={
+                    **log_context,
+                    "event": "event.ingest.rejected",
+                    "reason": "self_referencing_parent",
+                },
+            )
             # Would be caught below as "parent does not exist", but that message
             # sends the caller looking for a missing event rather than at the
             # actual mistake.
@@ -76,6 +111,15 @@ def ingest_event(
                 ),
             )
         if session.get(AgentEvent, payload.parent_event_id) is None:
+            logger.warning(
+                "event rejected: unknown parent",
+                extra={
+                    **log_context,
+                    "event": "event.ingest.rejected",
+                    "reason": "unknown_parent",
+                    "parent_event_id": str(payload.parent_event_id),
+                },
+            )
             raise HTTPException(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail=f"parent_event_id {payload.parent_event_id} does not exist",
@@ -108,6 +152,27 @@ def ingest_event(
     )
     findings = evaluate(event, baseline)
 
+    fired = [f.rule_name for f in findings]
+    evaluated = ALL_RULE_NAMES if baseline.is_established else []
+    logger.info(
+        "rules evaluated",
+        extra={
+            "event": "event.rules.evaluated",
+            "event_id": str(payload.event_id),
+            "actor_id": payload.actor_id,
+            "baseline_established": baseline.is_established,
+            "baseline_event_count": baseline.event_count,
+            "rules_evaluated": evaluated,
+            "rules_fired": fired,
+            "rules_passed": [r for r in evaluated if r not in fired],
+            # A cold-start agent is judged by nothing; say so explicitly rather
+            # than letting an empty result look like a clean bill of health.
+            "skipped_reason": (
+                None if baseline.is_established else "baseline_not_established"
+            ),
+        },
+    )
+
     # A tripped rule is the platform's own verdict. It is recorded separately
     # from what the caller claimed: reported_status is left exactly as it
     # arrived, while platform_status carries our conclusion. A caller that
@@ -128,6 +193,24 @@ def ingest_event(
     for alert in alerts:
         session.add(alert)
     session.flush()
+
+    for finding, alert in zip(findings, alerts, strict=True):
+        logger.warning(
+            "alert raised",
+            extra={
+                "event": "alert.raised",
+                "alert_id": str(alert.alert_id),
+                "event_id": str(event.event_id),
+                "actor_id": event.actor_id,
+                "target_id": event.target_id,
+                "target_type": event.target_type,
+                "rule": finding.rule_name,
+                "severity": finding.severity,
+                # The evidence (`details`) is intentionally not logged: it
+                # restates amounts, queries and counterparties. It is durable
+                # in Postgres and reachable via GET /alerts/{alert_id}.
+            },
+        )
 
     driver = get_driver()
     with driver.session() as neo_session:
@@ -151,7 +234,20 @@ def ingest_event(
         except Exception as exc:
             neo_tx.rollback()
             session.rollback()
-            logger.exception("failed to ingest event %s", payload.event_id)
+            logger.error(
+                "ingest failed; nothing was written",
+                exc_info=True,
+                extra={
+                    "event": "event.ingest.failed",
+                    "event_id": str(payload.event_id),
+                    "actor_id": payload.actor_id,
+                    "stage": "staged_write",
+                    "postgres_write": "rolled_back",
+                    "neo4j_write": "rolled_back",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:300],
+                },
+            )
             raise HTTPException(
                 status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="event could not be recorded; nothing was written",
@@ -159,20 +255,50 @@ def ingest_event(
         else:
             try:
                 neo_tx.commit()
-            except Exception:
+            except Exception as exc:
                 # Postgres already holds the event. Discarding a durable
                 # security event because a projection failed would be worse
                 # than a temporarily incomplete graph, so the event stands and
                 # stays flagged as unprojected for the reconciler to repair.
-                logger.exception(
-                    "event %s committed to postgres but graph projection failed; "
-                    "left unprojected for reconciliation",
-                    event.event_id,
-                    extra={"event_id": str(event.event_id), "stage": "graph_commit"},
+                logger.error(
+                    "postgres committed but graph projection failed; "
+                    "event left unprojected for reconciliation",
+                    exc_info=True,
+                    extra={
+                        "event": "event.ingest.graph_commit_failed",
+                        "event_id": str(event.event_id),
+                        "actor_id": event.actor_id,
+                        "target_id": event.target_id,
+                        "stage": "graph_commit",
+                        "postgres_write": "committed",
+                        "neo4j_write": "failed",
+                        "graph_projected": False,
+                        "remediation": "POST /events/reconcile",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:300],
+                    },
                 )
             else:
                 event.graph_projected = True
                 session.commit()
+                logger.info(
+                    "event ingested",
+                    extra={
+                        "event": "event.ingest.completed",
+                        "event_id": str(event.event_id),
+                        "actor_id": event.actor_id,
+                        "target_id": event.target_id,
+                        "action_type": event.action_type,
+                        "reported_status": event.reported_status,
+                        "platform_status": event.platform_status,
+                        "status_overridden": event.reported_status
+                        != event.platform_status,
+                        "alert_count": len(alerts),
+                        "postgres_write": "committed",
+                        "neo4j_write": "committed",
+                        "graph_projected": True,
+                    },
+                )
 
     session.refresh(event)
     return IngestResponse(

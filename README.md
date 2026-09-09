@@ -94,7 +94,7 @@ Every agent action is one **Agent Event**:
 | `GET` | `/alerts/{alert_id}` | A single alert with full detail |
 | `GET` | `/forensics/timeline/{event_id}` | Full causal chain for an event |
 | `POST` | `/events/reconcile` | Re-project events that reached Postgres but not the graph |
-| `GET` | `/health` | Liveness |
+| `GET` | `/health` | Liveness **and** dependency health (503 if a store is unreachable) |
 
 Status is split in two on purpose. An agent reporting its own actions cannot be
 trusted to grade them, so its claim (`reported_status`) is stored verbatim and
@@ -178,6 +178,82 @@ Agent status has **three** states, not two:
   Shown distinctly because reporting such an agent as "Healthy" would be a false
   reassurance (see *Known limitation: cold start* above).
 
+## Observability
+
+### Health checks
+
+`GET /health` issues a real query against each store — `SELECT 1` on Postgres and
+`RETURN 1` on Neo4j — and reports them **individually**, so a caller can tell
+which dependency is down rather than only that something is:
+
+```json
+{ "status": "healthy", "postgres": "ok", "neo4j": "ok",
+  "latency_ms": { "postgres": 0.9, "neo4j": 6.7 } }
+```
+
+If either is unreachable the endpoint returns **503** with the specific failure
+named:
+
+```json
+{ "status": "degraded", "postgres": "ok",
+  "neo4j": "error: ServiceUnavailable: Failed to read from defunct connection" }
+```
+
+Each probe runs on a worker thread with a short deadline (2s, `HEALTH_TIMEOUT_SECONDS`).
+A store that has stopped answering usually *hangs* rather than refusing, and a
+health check that hangs with it is what takes the load balancer down alongside
+the dependency — so a timeout is reported as a failure rather than waited on.
+Both stores are always probed, even after the first fails, because "one thing
+broke" and "everything broke" call for different responses.
+
+### Structured logs
+
+Every log line is a single JSON object on stdout, with the interesting fields
+hoisted to the top level so they are queryable without regex. Set
+`LOG_FORMAT=text` for human-readable output locally, `LOG_LEVEL` to adjust
+verbosity.
+
+Each line carries an `event` field naming what happened:
+
+| `event` | Level | Emitted when |
+|---|---|---|
+| `event.ingest.received` | INFO | An event arrives — ids, types, `reported_status`, `permission_count` |
+| `event.ingest.rejected` | WARNING | Refused, with a machine-readable `reason` (`duplicate`, `unknown_parent`, `self_referencing_parent`) |
+| `event.rules.evaluated` | INFO | `rules_evaluated`, `rules_fired`, `rules_passed`, and `skipped_reason` when the baseline is too thin to judge |
+| `alert.raised` | WARNING | A rule fired — `rule`, `severity`, `alert_id` |
+| `event.ingest.completed` | INFO | Both writes committed — `postgres_write`, `neo4j_write`, `status_overridden` |
+| `event.ingest.failed` | ERROR | Nothing was written; both sides rolled back |
+| `event.ingest.graph_commit_failed` | ERROR | **Postgres committed, graph did not** — carries `remediation` |
+| `reconcile.started` / `.completed` | INFO | Backlog size, repaired count, quarantined count |
+| `reconcile.event.repaired` | INFO | One event re-projected successfully |
+| `reconcile.event.quarantined` | **ERROR** | Still not in the graph — flagged `quarantined: true`, `alert_worthy: true` |
+
+Useful queries:
+
+```bash
+# everything about one event, in causal order
+docker compose logs backend | jq -c 'select(.event_id=="<uuid>")'
+
+# every alert this agent raised
+docker compose logs backend | jq -c 'select(.event=="alert.raised" and .actor_id=="payment-agent")'
+
+# events that are durable but missing from the graph — these need reconciling
+docker compose logs backend | jq -c 'select(.event=="event.ingest.graph_commit_failed")'
+
+# anything requiring a human
+docker compose logs backend | jq -c 'select(.alert_worthy==true)'
+```
+
+**What is deliberately kept out of logs.** Event `metadata` and alert `details`
+never appear. They carry the substance of what an agent did — transaction
+amounts, query text, counterparties — and that belongs in Postgres behind its
+access controls, not duplicated into a log pipeline that is usually readable by
+a far wider audience. Logs carry identifiers, types, statuses, rule names,
+severities and counts: enough to find and correlate an event, not enough to leak
+what it contained. Permissions are counted on receipt rather than copied. There
+are tests asserting this, because it is the kind of property that decays
+silently.
+
 ## Error handling
 
 Every endpoint answers bad input with a 4xx and a message a caller can act on.
@@ -239,7 +315,7 @@ That spins up throwaway databases on their own ports under their own Compose
 project (`aasec-test`), so it never touches the dev stack or its seeded data.
 Postgres runs on tmpfs, so every run starts from nothing.
 
-**176 tests, 98% statement coverage.**
+**209 tests, 98% statement coverage.**
 
 | Area | What is pinned |
 |---|---|
@@ -254,6 +330,10 @@ Postgres runs on tmpfs, so every run starts from nothing.
 | `tests/integration/test_graph_projection.py` | MERGE idempotency: three identical events → one edge, `count=3` |
 | `tests/integration/test_error_handling.py` | Every endpoint against bad input: malformed JSON, unknown enums, blank identities, orphan parents, bad UUIDs, out-of-range params, and that no 500 ever leaks internals |
 | `tests/integration/test_staged_write_failure.py` | The Postgres-committed / graph-failed window, asserted as a state transition and healed by the reconciler |
+| `tests/unit/test_logging.py` | JSON log shape: one object per line, extras hoisted for querying |
+| `tests/integration/test_ingest_logging.py` | The ingest path's log events and levels, and that metadata never leaks into logs |
+| `tests/integration/test_reconcile_logging.py` | Staged-write failure and quarantine logging |
+| `tests/integration/test_health.py` | `/health` against genuinely dead servers and a hanging dependency |
 
 The suite is mutation-checked — breaking the cold-start threshold, letting
 suspicious events back into baselines, downgrading `blocked`, or swapping the
@@ -286,6 +366,26 @@ rather than assumed correct, and each gate was verified by deliberately breaking
 it: a failing assertion, an unused import, bad formatting, an unresolvable
 frontend import, and a failed job feeding the gate. All five failed the build.
 
+## Hardening summary
+
+The MVP is hardened across four areas. Each was verified rather than assumed:
+
+| | Covers | Evidence |
+|---|---|---|
+| **1. Test suite** | Unit, integration and regression tests against **real** Postgres and Neo4j | 209 tests, 98% coverage; mutation-checked — breaking the cold-start threshold, letting suspicious events into baselines, downgrading `blocked`, or swapping `MERGE` for `CREATE` each makes it fail |
+| **2. Errors & validation** | Every endpoint audited against bad input; staged-write reconciliation | 38 bad-input cases all return 4xx, none 2xx or 5xx; five real defects found and fixed; the Postgres-committed/graph-failed window asserted as a state transition and healed |
+| **3. CI** | ruff, black, full suite against pinned service containers, frontend build, behind one required gate | Green on GitHub; every gate verified by deliberately breaking it on a throwaway branch |
+| **4. Observability** | JSON structured logging across the ingest path; real dependency health checks | Logs verified on a live stack; `/health` returns 503 in ~18ms naming the specific dead store; tests assert sensitive metadata never reaches logs |
+
+Known limitations, recorded rather than hidden:
+
+- **Cold start** — an agent with fewer than 3 clean events is `unrated`, not
+  judged. Documented above; surfaced distinctly in the UI so it is never
+  mistaken for a clean bill of health.
+- **No migrations** — the schema is created with `create_all`. Two changes so
+  far have needed a manual `DROP TABLE` and reseed in development. Alembic is
+  worth adding before there is data worth keeping.
+
 ## Build status
 
 - [x] Phase 1 — project scaffold (structure, Docker, configs)
@@ -295,3 +395,4 @@ frontend import, and a failed job feeding the gate. All five failed the build.
 - [x] Hardening 1 — automated test suite (176 tests, real databases)
 - [x] Hardening 2 — error handling, input validation, staged-write reconciliation
 - [x] Hardening 3 — CI pipeline (tests, lint, format, frontend build)
+- [x] Hardening 4 — structured JSON logging and real dependency health checks
