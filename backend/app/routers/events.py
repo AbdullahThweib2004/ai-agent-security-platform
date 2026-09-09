@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db.neo4j import get_driver, project_event
 from app.db.postgres import get_session
+from app.models.a2a import A2ADecision
 from app.models.delegation import Delegation
 from app.models.event import AgentEvent, Alert
 from app.schemas.alert import AlertRule
@@ -25,6 +26,7 @@ from app.schemas.errors import (
 )
 from app.schemas.event import (
     ActionType,
+    ActorType,
     AgentEventCreate,
     AgentEventOut,
     AlertOut,
@@ -32,7 +34,8 @@ from app.schemas.event import (
     IngestResponse,
     event_to_out,
 )
-from app.services import delegation_policy
+from app.services import a2a_policy, delegation_policy
+from app.services import identity as identity_service
 from app.services.anomaly import evaluate
 from app.services.baseline import compute_baseline
 from app.services.reconcile import reconcile as run_reconcile
@@ -146,6 +149,17 @@ def ingest_event(
     session.add(event)
     session.flush()
 
+    # Identity maintenance, before any policy runs. Every agent the platform
+    # observes gets a row, so trust has something to attach to and first/last
+    # seen reflect activity rather than administration. Only agents: a user is
+    # a person, not an agent identity, and the table is scoped to agents.
+    for party_type, party_id in (
+        (event.actor_type, event.actor_id),
+        (event.target_type, event.target_id),
+    ):
+        if party_type == ActorType.AGENT.value:
+            identity_service.record_activity(session, party_id, event.timestamp)
+
     # The baseline is built strictly from what came *before* this event, so an
     # anomalous event can never be used to normalise itself.
     baseline = compute_baseline(
@@ -216,12 +230,60 @@ def ingest_event(
             },
         )
 
+    # Interaction policy runs before delegation policy: it is the gate on
+    # whether the two agents should be talking at all, and delegation only
+    # matters once they are. Same request, same transaction, same path as the
+    # anomaly rules — no separate pipeline.
+    a2a_decision = None
+    if a2a_policy.applies_to(event):
+        a2a_verdict = a2a_policy.decide(session, event)
+        a2a_decision = A2ADecision(
+            event_id=event.event_id,
+            requester_id=a2a_verdict.requester_id,
+            target_id=a2a_verdict.target_id,
+            decision=a2a_verdict.decision,
+            rule=a2a_verdict.rule,
+            reason=a2a_verdict.reason,
+            requester_trust=a2a_verdict.requester_trust,
+            target_trust=a2a_verdict.target_trust,
+        )
+        session.add(a2a_decision)
+        session.flush()
+
+        logger.log(
+            logging.WARNING if a2a_verdict.is_blocked else logging.INFO,
+            "interaction decided",
+            extra={
+                "event": "a2a.decided",
+                "decision_id": str(a2a_decision.decision_id),
+                "event_id": str(event.event_id),
+                "requester_id": a2a_verdict.requester_id,
+                "target_id": a2a_verdict.target_id,
+                "decision": a2a_verdict.decision,
+                "rule": a2a_verdict.rule,
+                "requester_trust": a2a_verdict.requester_trust,
+                "target_trust": a2a_verdict.target_trust,
+            },
+        )
+
     # A delegation is still an event, so it runs on this same path rather than a
     # parallel pipeline: same request, same transaction, same staged write as
     # alerts. Only the extra decision is delegation-specific.
     delegation = None
     if event.action_type == ActionType.DELEGATION.value:
-        verdict = delegation_policy.decide(session, event)
+        # If interaction policy already refused the conversation, delegation
+        # cites that rather than reaching the same conclusion under its own
+        # rule name. Its other rules still run: an upstream block says the
+        # agents should not be talking, not that the delegator's permissions
+        # changed.
+        upstream = None
+        if a2a_decision is not None and a2a_decision.decision == "blocked":
+            upstream = delegation_policy.UpstreamBlock(
+                decision_id=str(a2a_decision.decision_id),
+                rule=a2a_decision.rule,
+                reason=a2a_decision.reason,
+            )
+        verdict = delegation_policy.decide(session, event, upstream=upstream)
         delegation = Delegation(
             event_id=event.event_id,
             delegator_id=verdict.delegator_id,

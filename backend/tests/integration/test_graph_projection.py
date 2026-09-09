@@ -171,3 +171,32 @@ def test_unknown_types_are_rejected_before_touching_the_graph(neo, field, value)
     with pytest.raises(ValueError):
         project_event(**projection(**{field: value}))
     assert counts(neo) == {"nodes": 0, "edges": 0}
+
+
+def test_the_new_agent_message_type_is_accepted_by_the_whitelist(neo):
+    """Symmetric to the rejection test above.
+
+    Relationship types are interpolated into Cypher from _REL_TYPES, so adding
+    an action_type to the enum without adding it here makes every event of that
+    type fail at ingest. This pins the two together.
+    """
+    project_event(**projection(action_type="agent_message", target_type="agent"))
+    assert counts(neo) == {"nodes": 2, "edges": 1}
+    rel = neo.run(
+        "MATCH ()-[r:AGENT_MESSAGE]->() RETURN type(r) AS t, r.count AS c"
+    ).single()
+    assert rel["t"] == "AGENT_MESSAGE"
+    assert rel["c"] == 1
+
+
+def test_every_action_type_in_the_enum_can_be_projected():
+    """A guard on the coupling itself, not on one value.
+
+    Adding a fifth action_type and forgetting the whitelist is the failure this
+    catches — before it reaches ingest.
+    """
+    from app.db.neo4j import _rel_for
+    from app.schemas.event import ActionType
+
+    for action in ActionType:
+        assert _rel_for(action.value), f"{action.value} has no relationship type"

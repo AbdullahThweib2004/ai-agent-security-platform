@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.baseline import MIN_BASELINE_EVENTS, AgentBaseline
+from app.services.baseline import AgentBaseline
 from app.services.delegation_policy import (
     PermissionVerdict,
     _summarise,
@@ -21,6 +21,7 @@ from app.services.delegation_policy import (
     extract_requested_permissions,
     reduced_form,
 )
+from app.services.trust import MIN_BASELINE_EVENTS
 
 ALLOWED, LIMITED, BLOCKED = "allowed", "limited", "blocked"
 
@@ -431,3 +432,53 @@ def test_the_dominant_rule_still_wins_over_precedence():
     ]
     _, reason = _summarise(["a", "b", "c"], verdicts, unrated())
     assert "unrated_delegate" in reason
+
+
+# --- layering: an operator's word counts as vouching ------------------------
+def test_an_operator_classification_satisfies_the_rating_rule():
+    """The two layers must agree about what "vouched for" means.
+
+    Accepting history but not an operator's word would let an operator permit a
+    conversation and still be unable to let anything travel through it.
+    """
+    delegator = agent(permissions=["fx:read"])
+    delegate = agent("partner-agent", (), events=0)
+
+    without = decide_permission("fx:read", delegator, delegate)
+    assert without.decision == BLOCKED
+    assert without.rule == "unrated_delegate"
+
+    for level in ("internal", "external_trusted"):
+        with_trust = decide_permission(
+            "fx:read", delegator, delegate, delegate_trust=level
+        )
+        assert with_trust.decision == ALLOWED, level
+
+
+def test_an_untrusted_classification_does_not_satisfy_the_rating_rule():
+    delegator = agent(permissions=["fx:read"])
+    delegate = agent("shady-agent", (), events=0)
+    verdict = decide_permission(
+        "fx:read", delegator, delegate, delegate_trust="external_untrusted"
+    )
+    assert verdict.decision == BLOCKED
+    assert verdict.rule == "unrated_delegate"
+
+
+def test_an_upstream_block_replaces_only_the_rating_rule():
+    """Confinement still fires; only the redundant check is displaced."""
+    from app.services.delegation_policy import UpstreamBlock
+
+    upstream = UpstreamBlock(
+        decision_id="abc-123", rule="untrusted_party", reason="why"
+    )
+    delegator = agent(permissions=["fx:read"])
+    delegate = rated()
+
+    unheld = decide_permission("bank:admin", delegator, delegate, upstream=upstream)
+    assert unheld.rule == "confinement", "delegation's own reasoning must survive"
+
+    held = decide_permission("fx:read", delegator, delegate, upstream=upstream)
+    assert held.rule == "upstream_a2a_block"
+    assert "abc-123" in held.reason
+    assert held.decision == BLOCKED

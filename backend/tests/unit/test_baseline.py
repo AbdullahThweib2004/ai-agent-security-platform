@@ -7,11 +7,8 @@ from datetime import timedelta
 import pytest
 
 from app.models.event import AgentEvent
-from app.services.baseline import (
-    MIN_BASELINE_EVENTS,
-    compute_baseline,
-    extract_value,
-)
+from app.services.baseline import compute_baseline, extract_value
+from app.services.trust import MIN_BASELINE_EVENTS
 from tests.conftest import BASE_TIME
 
 

@@ -105,6 +105,12 @@ class AgentEvent(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    a2a_decision = relationship(
+        "A2ADecision",
+        back_populates="event",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
     __table_args__ = (
         Index("ix_agent_events_actor_id", "actor_id"),

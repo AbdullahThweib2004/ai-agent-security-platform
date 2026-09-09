@@ -29,6 +29,7 @@ _REL_TYPES = {
     "delegation": "DELEGATION",
     "data_access": "DATA_ACCESS",
     "api_call": "API_CALL",
+    "agent_message": "AGENT_MESSAGE",
 }
 
 # Entity type -> secondary node label.

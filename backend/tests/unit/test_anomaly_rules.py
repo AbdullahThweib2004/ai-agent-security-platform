@@ -18,7 +18,8 @@ from app.services.anomaly import (
     _rule_value_excursion,
     evaluate,
 )
-from app.services.baseline import MIN_BASELINE_EVENTS, AgentBaseline
+from app.services.baseline import AgentBaseline
+from app.services.trust import MIN_BASELINE_EVENTS
 
 
 def make_event(**kw):

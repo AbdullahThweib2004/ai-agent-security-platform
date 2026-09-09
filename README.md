@@ -98,6 +98,10 @@ Every agent action is one **Agent Event**:
 | `GET` | `/alerts/{alert_id}` | A single alert with full detail |
 | `GET` | `/delegations` | Delegation decisions, filterable by delegator, delegate, decision |
 | `GET` | `/delegations/{delegation_id}` | One decision with its permission-by-permission reasoning |
+| `POST` | `/agents/{agent_id}/trust` | Assert an agent's trust level (operator action) |
+| `GET` | `/agents/{agent_id}/trust` | An agent's identity and trust level |
+| `GET` | `/a2a-decisions` | Interaction decisions, filterable by requester, target, decision |
+| `GET` | `/a2a-decisions/{decision_id}` | One decision with the trust levels it was made under |
 | `GET` | `/forensics/timeline/{event_id}` | Full causal chain for an event |
 | `POST` | `/events/reconcile` | Re-project events that reached Postgres but not the graph |
 | `GET` | `/health` | Liveness **and** dependency health (503 if a store is unreachable) |
@@ -132,6 +136,69 @@ the confinement rule through the back door.
 Delegations declare what they want in `metadata.requested_permissions`. When
 absent — as in any emitter predating this feature — `permissions_used` is used
 instead, so existing traffic is governed with no backfill and no schema change.
+
+## Interaction policy (A2A)
+
+Before asking what authority travels with a handoff, the platform asks whether
+the two agents should be interacting at all. Every **agent → agent** event gets a
+verdict — both delegations and the `agent_message` type, which is agents talking
+without handing anything over. A user directing an agent is not agent-to-agent
+traffic, and a tool, API or database is not an identity that can be trusted.
+
+| Rule | Effect |
+|---|---|
+| `untrusted_party` | Either side classified `external_untrusted` — refused regardless of what was requested |
+| `unrated_counterparty` | The target has too little history to vouch for, and no operator has classified it |
+| `default_allow` | Anything else, including internal → internal |
+
+Trust is **hybrid**. `unrated` is derived from clean history through the same
+`services/trust.py` threshold the anomaly rules and delegation policy use — one
+definition, four consumers. `internal`, `external_trusted` and
+`external_untrusted` are asserted by an operator, because no event stream can
+tell you whether an agent belongs to your organisation:
+
+```bash
+curl -X POST localhost:8000/agents/partner-agent/trust \
+     -H 'Content-Type: application/json' -d '{"trust_level": "external_trusted"}'
+```
+
+An assertion may be made before an agent has ever been seen — pre-marking a
+known-bad counterparty is the point, and requiring a prior event would grant it
+one free interaction first. `unrated` is deliberately **not** assertable: it is
+the absence of a classification, which the platform derives.
+
+Only the **target** is judged on rating, not the requester. An agent's own first
+actions are how it earns a history, so refusing them would mean no agent could
+ever become rated — the same reason the anomaly rules decline to judge a
+cold-start actor. `external_untrusted` is enforced in **both** directions, since
+that is an explicit assertion with no cold-start cost.
+
+### Recording, not enforcing
+
+An interaction verdict does **not** change the event's `platform_status`. This
+platform observes traffic after the fact rather than sitting in the request path,
+so every decision it makes is a record rather than an intervention. It also
+avoids a feedback loop: flagged events are excluded from baselines, so flagging
+an agent's first contact would remove that counterparty from the baseline and
+make every later contact look novel — blocking the relationship permanently. The
+verdict is durable and queryable without poisoning the data it depends on.
+
+### Layering: the gate runs first
+
+Interaction policy evaluates before delegation policy. When it refuses, the
+delegation record **cites that decision by id** rather than reaching the same
+conclusion under its own rule name — one event, one explanation, two layers.
+
+Only the redundant check is displaced. `confinement` and `sensitive_category`
+still evaluate and still fire: a refused conversation says the agents should not
+be talking, not that the delegator's permissions changed. In the seeded
+incident, all three requested permissions are refused by delegation's *own*
+rules while the headline reason points at the upstream block.
+
+"Vouched for" means the same thing in both layers — enough clean history **or**
+an operator classification. Accepting history but not an operator's word would
+let an operator permit a conversation and still be unable to let anything travel
+through it.
 
 ## Anomaly rules (rule-based only — no ML in this phase)
 
@@ -187,17 +254,25 @@ payment-agent → bank-api, plus reconciliation runs) and then one chained
 incident: an 880,000 payment approved out of nowhere, handed off to an
 `external-agent-x` nobody has ever contacted, alongside a bulk read of the
 customer database, with the funds finally leaving via `offshore-api`. It seeds
-**228 events raising exactly 6 alerts** — the 222 normal events raise none, so
+**243 events raising exactly 6 alerts** — the 236 normal events raise none, so
 the incident is not buried in noise. The script prints a ready-to-run
 `/forensics/timeline/...` URL for the incident when it finishes.
 
-It also seeds **89 delegation decisions — 71 allowed, 12 limited, 6 blocked** —
+It also seeds **89 delegation decisions — 72 allowed, 13 limited, 4 blocked** —
 so all three least-privilege outcomes are visible without constructing anything
 by hand. The daily `finance-agent → reconciliation-agent` handoff is the one to
 look at: it asks for `db:write_payment` every day and the answer changes as the
 delegate earns a history — refused on day one because finance-agent does not yet
 hold the permission, refused on day two because the delegate is still unrated,
 and from day three granted `db:read_payment` instead of the write it asked for.
+
+And **67 interaction decisions — 65 allowed, 2 blocked** — one per agent-to-agent
+event. The operator onboards the three internal agents at the start, so internal
+traffic flows from first contact; `external-agent-x` is never vouched for, so the
+incident handoff is refused at the interaction layer as well as the delegation
+layer. After the incident the operator marks it `external_untrusted`, and its
+next probe is refused on identity alone rather than having to look anomalous all
+over again.
 
 ## The dashboard
 
@@ -207,6 +282,7 @@ and from day three granted `db:read_payment` instead of the write it asked for.
 | Behavior Graph | `/graph`, `/graph/{agent_id}` | Interactive force-directed graph. Suspicious nodes carry a red ring, suspicious edges are drawn red and animated. Selecting an agent shows its baseline |
 | Alerts | `/alerts`, `/alerts/{alert_id}` | Triage queue sorted by severity, filterable by rule and severity. The detail panel shows the evidence that produced each alert |
 | Delegations | `/delegations`, `/delegations/{id}` | Every handoff with a granted/requested ratio for at-a-glance scanning; the detail panel breaks down each requested permission, its verdict, the rule and the reason |
+| Interactions | `/interactions`, `/interactions/{id}` | Every agent-to-agent exchange with the trust levels that decided it; a delegation refused upstream links straight to the decision that refused it |
 | Forensics | `/forensics`, `/forensics/{event_id}` | Top-to-bottom incident timeline, indented by causal depth, with alerts inline |
 
 Agent status has **three** states, not two:
@@ -354,7 +430,7 @@ That spins up throwaway databases on their own ports under their own Compose
 project (`aasec-test`), so it never touches the dev stack or its seeded data.
 Postgres runs on tmpfs, so every run starts from nothing.
 
-**302 tests, 98% statement coverage.**
+**425 tests, 99% statement coverage.**
 
 | Area | What is pinned |
 |---|---|
@@ -375,6 +451,9 @@ Postgres runs on tmpfs, so every run starts from nothing.
 | `tests/integration/test_health.py` | `/health` against genuinely dead servers and a hanging dependency |
 | `tests/unit/test_delegation_policy.py` | Each delegation rule in isolation, precedence, and the reduction boundaries |
 | `tests/integration/test_delegations_api.py` | Both delegation routes, every filter, and that `requested_permissions` governs over `permissions_used` |
+| `tests/unit/test_a2a_policy.py` | Each interaction rule in isolation, precedence, and the rating boundary |
+| `tests/integration/test_a2a_api.py` | Both interaction routes, every filter, and that the id a delegation cites actually resolves |
+| `tests/integration/test_layering.py` | All four A2A/delegation combinations — the gate replaces only the redundant check |
 
 The suite is mutation-checked — breaking the cold-start threshold, letting
 suspicious events back into baselines, downgrading `blocked`, or swapping the
@@ -413,7 +492,7 @@ The MVP is hardened across four areas. Each was verified rather than assumed:
 
 | | Covers | Evidence |
 |---|---|---|
-| **1. Test suite** | Unit, integration and regression tests against **real** Postgres and Neo4j | 302 tests, 98% coverage; mutation-checked — breaking the cold-start threshold, letting suspicious events into baselines, downgrading `blocked`, or swapping `MERGE` for `CREATE` each makes it fail |
+| **1. Test suite** | Unit, integration and regression tests against **real** Postgres and Neo4j | 425 tests, 99% coverage; mutation-checked — breaking the cold-start threshold, letting suspicious events into baselines, downgrading `blocked`, or swapping `MERGE` for `CREATE` each makes it fail |
 | **2. Errors & validation** | Every endpoint audited against bad input; staged-write reconciliation | 38 bad-input cases all return 4xx, none 2xx or 5xx; five real defects found and fixed; the Postgres-committed/graph-failed window asserted as a state transition and healed |
 | **3. CI** | ruff, black, full suite against pinned service containers, frontend build, behind one required gate | Green on GitHub; every gate verified by deliberately breaking it on a throwaway branch |
 | **4. Observability** | JSON structured logging across the ingest path; real dependency health checks | Logs verified on a live stack; `/health` returns 503 in ~18ms naming the specific dead store; tests assert sensitive metadata never reaches logs |
@@ -438,3 +517,4 @@ Known limitations, recorded rather than hidden:
 - [x] Hardening 3 — CI pipeline (tests, lint, format, frontend build)
 - [x] Hardening 4 — structured JSON logging and real dependency health checks
 - [x] Phase 3 — Delegation Security (policy engine, API, tests, UI)
+- [x] Phase 4 — A2A Security (identity & trust, interaction policy, layering, API, UI)

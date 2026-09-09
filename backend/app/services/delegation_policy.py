@@ -35,8 +35,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.schemas.a2a import TrustLevel
 from app.schemas.delegation import DelegationDecision, PermissionDecision
 from app.services.baseline import AgentBaseline, compute_baseline
+from app.services.identity import trust_level_of
+from app.services.trust import unrated_reason
 
 # Permission families that are never handed on automatically.
 #
@@ -100,6 +103,21 @@ _RULE_PRECEDENCE = {
     "sensitive_category": 1,
     "unrated_delegate": 2,
 }
+
+
+@dataclass
+class UpstreamBlock:
+    """An interaction the A2A layer already refused.
+
+    Delegation is downstream of that gate: if the two agents should not be
+    talking, there is nothing to decide about what authority travels. Rather
+    than re-deriving the same conclusion under a second rule name, delegation
+    cites this — one event, one explanation, two layers.
+    """
+
+    decision_id: str
+    rule: str
+    reason: str
 
 
 @dataclass
@@ -276,25 +294,56 @@ def _rule_sensitive_category(
 
 
 def _rule_unrated_delegate(
-    permission: str, delegate: AgentBaseline
+    permission: str, delegate: AgentBaseline, delegate_trust: str = "unrated"
 ) -> PermissionVerdict | None:
-    """A delegate nobody can vouch for receives nothing."""
+    """A delegate nobody can vouch for receives nothing.
+
+    "Vouched for" means the same thing here as it does at the interaction
+    layer: enough clean history, *or* an operator classification. Accepting
+    history but not an operator's word would have the two layers disagree about
+    one fact — an operator could permit the conversation and still be unable to
+    let anything travel through it.
+    """
+    if delegate_trust in (
+        TrustLevel.INTERNAL.value,
+        TrustLevel.EXTERNAL_TRUSTED.value,
+    ):
+        return None
     if delegate.is_established:
         return None
     return PermissionVerdict(
         permission=permission,
         decision=PermissionDecision.BLOCKED.value,
         rule="unrated_delegate",
+        reason=unrated_reason(
+            delegate.agent_id,
+            delegate.event_count,
+            "too little history to delegate any authority to",
+        ),
+        granted_as=None,
+    )
+
+
+def _rule_upstream_block(permission: str, upstream: UpstreamBlock) -> PermissionVerdict:
+    """The interaction was already refused, so nothing travels with it."""
+    return PermissionVerdict(
+        permission=permission,
+        decision=PermissionDecision.BLOCKED.value,
+        rule="upstream_a2a_block",
         reason=(
-            f"{delegate.agent_id} is unrated — only {delegate.event_count} clean "
-            "event(s) on record, too little history to delegate any authority to"
+            f"the interaction itself was refused by interaction policy "
+            f"({upstream.rule}, decision {upstream.decision_id}): {upstream.reason}"
         ),
         granted_as=None,
     )
 
 
 def decide_permission(
-    permission: str, delegator: AgentBaseline, delegate: AgentBaseline
+    permission: str,
+    delegator: AgentBaseline,
+    delegate: AgentBaseline,
+    upstream: UpstreamBlock | None = None,
+    delegate_trust: str = "unrated",
 ) -> PermissionVerdict:
     """Judge one permission against every rule.
 
@@ -309,10 +358,21 @@ def decide_permission(
         granted_as=permission,
     )
 
+    # Confinement and sensitive_category always run: an upstream block says the
+    # agents should not be talking, not that the delegator suddenly holds
+    # permissions it does not. Only the third rule is replaced, because
+    # "the counterparty cannot be vouched for" is precisely what A2A already
+    # said — re-deriving it would be the same finding twice under two names.
+    third_rule = (
+        (lambda: _rule_upstream_block(permission, upstream))
+        if upstream is not None
+        else (lambda: _rule_unrated_delegate(permission, delegate, delegate_trust))
+    )
+
     for rule in (
         lambda: _rule_confinement(permission, delegator),
         lambda: _rule_sensitive_category(permission, delegator),
-        lambda: _rule_unrated_delegate(permission, delegate),
+        third_rule,
     ):
         finding = rule()
         if finding is None:
@@ -325,14 +385,23 @@ def decide_permission(
 
 
 def evaluate_delegation(
-    event, delegator: AgentBaseline, delegate: AgentBaseline
+    event,
+    delegator: AgentBaseline,
+    delegate: AgentBaseline,
+    upstream: UpstreamBlock | None = None,
+    delegate_trust: str = "unrated",
 ) -> DelegationVerdict:
     """Decide a whole delegation event."""
     requested = extract_requested_permissions(event)
-    verdicts = [decide_permission(p, delegator, delegate) for p in requested]
+    verdicts = [
+        decide_permission(
+            p, delegator, delegate, upstream=upstream, delegate_trust=delegate_trust
+        )
+        for p in requested
+    ]
     granted = [v.granted_as for v in verdicts if v.granted_as is not None]
 
-    decision, reason = _summarise(requested, verdicts, delegate)
+    decision, reason = _summarise(requested, verdicts, delegate, upstream)
 
     return DelegationVerdict(
         delegator_id=delegator.agent_id,
@@ -346,9 +415,24 @@ def evaluate_delegation(
 
 
 def _summarise(
-    requested: list[str], verdicts: list[PermissionVerdict], delegate: AgentBaseline
+    requested: list[str],
+    verdicts: list[PermissionVerdict],
+    delegate: AgentBaseline,
+    upstream: UpstreamBlock | None = None,
 ) -> tuple[str, str]:
     """The headline decision and the rule that best explains it."""
+    if upstream is not None:
+        # The gate closed before this layer had a question to answer. Say so
+        # once, pointing at the decision that closed it, rather than restating
+        # its reasoning as though delegation had reached it independently.
+        return (
+            DelegationDecision.BLOCKED.value,
+            (
+                f"refused upstream by interaction policy ({upstream.rule}, "
+                f"decision {upstream.decision_id}); no authority was delegated"
+            ),
+        )
+
     if not requested:
         return (
             DelegationDecision.ALLOWED.value,
@@ -395,7 +479,9 @@ def _summarise(
     )
 
 
-def decide(session: Session, event) -> DelegationVerdict:
+def decide(
+    session: Session, event, upstream: UpstreamBlock | None = None
+) -> DelegationVerdict:
     """Entry point used at ingest: derive both baselines, then decide.
 
     Both sides are derived the same way agent behaviour is derived everywhere
@@ -411,4 +497,10 @@ def decide(session: Session, event) -> DelegationVerdict:
         before=event.timestamp,
         exclude_event_id=event.event_id,
     )
-    return evaluate_delegation(event, delegator, delegate)
+    return evaluate_delegation(
+        event,
+        delegator,
+        delegate,
+        upstream=upstream,
+        delegate_trust=trust_level_of(session, event.target_id),
+    )

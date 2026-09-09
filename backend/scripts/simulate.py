@@ -153,6 +153,14 @@ def emit(
     return data
 
 
+def register_trust(agent, level: str) -> None:
+    """Assert an operator's classification for an agent."""
+    _, agent_id = agent
+    status, data = _request("POST", f"/agents/{agent_id}/trust", {"trust_level": level})
+    if status != 200:
+        sys.exit(f"trust assertion failed ({status}): {data}")
+
+
 def event_id(response) -> str:
     return response["event"]["event_id"]
 
@@ -297,6 +305,26 @@ def seed_normal(start: datetime, days: int = 14) -> int:
         )
         count += 1
 
+        # Agents talking without handing anything over: reconciliation-agent
+        # checks that payment-agent is up before it closes the day. Nothing is
+        # delegated, so interaction policy is the only layer with an opinion —
+        # which is the point of giving A2A its own surface.
+        #
+        # Emitted third in reconciliation-agent's day-0 sequence, while it still
+        # has fewer than three clean events, so payment-agent enters its
+        # baseline before the anomaly rules begin judging it. Introduced later
+        # this would trip unseen_counterparty and cascade, exactly as the
+        # finance-agent handoff did.
+        emit(
+            RECON,
+            PAYMENT,
+            "agent_message",
+            permissions=["agent:status"],
+            at=eod + timedelta(minutes=10),
+            metadata={"kind": "health_check", "question": "ready_to_close"},
+        )
+        count += 1
+
     return count
 
 
@@ -421,7 +449,9 @@ def reset() -> None:
     from app.db.postgres import session_scope
 
     with session_scope() as session:
-        session.execute(text("TRUNCATE agent_events, alerts CASCADE"))
+        # agent_identities has no foreign key to agent_events, so the cascade
+        # does not reach it and it must be named explicitly.
+        session.execute(text("TRUNCATE agent_events, alerts, agent_identities CASCADE"))
     with get_driver().session() as neo:
         neo.run("MATCH (n) DETACH DELETE n")
     print("  cleared postgres and neo4j")
@@ -447,6 +477,14 @@ def main() -> None:
 
     start = datetime.now(UTC) - timedelta(days=args.days + 1)
 
+    # An operator onboards the organisation's own agents. Without this every
+    # agent is unrated, and internal traffic would be refused on first contact
+    # simply because nobody had said who belongs here.
+    print("registering internal agents")
+    for agent in (FINANCE, PAYMENT, RECON):
+        register_trust(agent, "internal")
+    print(f"  {FINANCE[1]}, {PAYMENT[1]}, {RECON[1]} -> internal")
+
     print(f"seeding {args.days} days of normal banking operations")
     normal = seed_normal(start, days=args.days)
     print(f"  {normal} events")
@@ -455,6 +493,22 @@ def main() -> None:
     incident_at = start + timedelta(days=args.days, hours=10)
     incident, leaf = seed_incident(incident_at)
     print(f"  {incident} events")
+
+    # The incident is over and an operator now knows what external-agent-x is.
+    # Marking it untrusted is the lever that stops the next attempt at the door,
+    # rather than waiting for it to look anomalous all over again.
+    print("operator marks the external agent untrusted")
+    register_trust(EXTERNAL, "external_untrusted")
+    incident += 1  # the probe below is an ingested event and must be counted
+    emit(
+        EXTERNAL,
+        PAYMENT,
+        "agent_message",
+        permissions=["agent:status"],
+        at=incident_at + timedelta(minutes=30),
+        metadata={"kind": "probe", "question": "still_open"},
+    )
+    print("  a follow-up probe from it is now refused at the interaction layer")
 
     _, alerts = _request("GET", "/alerts?limit=1000")
     _, graph = _request("GET", "/graph")

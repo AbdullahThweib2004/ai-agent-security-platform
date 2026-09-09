@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.event import AgentEvent
+from app.services.trust import is_rated
 
 # Metadata keys inspected for a numeric "value" of the action, in priority
 # order. The first key present and numeric wins.
@@ -27,8 +28,6 @@ VALUE_KEYS = ("amount", "transaction_amount", "value", "total")
 # An agent needs at least this much history before its baseline is trusted
 # enough to judge against; below it, everything looks novel and every event
 # would be an alert.
-MIN_BASELINE_EVENTS = 3
-
 # Statuses that never contribute to "normal".
 _EXCLUDED_FROM_BASELINE = frozenset({"blocked", "suspicious"})
 
@@ -49,8 +48,12 @@ class AgentBaseline:
 
     @property
     def is_established(self) -> bool:
-        """Whether there is enough history to judge new behaviour against."""
-        return self.event_count >= MIN_BASELINE_EVENTS
+        """Whether there is enough history to judge new behaviour against.
+
+        Delegates to ``trust.is_rated`` so this and every other consumer share
+        one definition of "unrated" rather than four that must agree.
+        """
+        return is_rated(self.event_count)
 
     @property
     def value_min(self) -> float | None:

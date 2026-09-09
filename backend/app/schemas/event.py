@@ -49,6 +49,10 @@ class ActionType(str, Enum):
     DELEGATION = "delegation"
     DATA_ACCESS = "data_access"
     API_CALL = "api_call"
+    # Agents talking without handing over work: a status query, a health check,
+    # a broadcast. This is the surface where interaction policy is the only
+    # thing evaluating the exchange, since nothing is being delegated.
+    AGENT_MESSAGE = "agent_message"
 
 
 class EventStatus(str, Enum):

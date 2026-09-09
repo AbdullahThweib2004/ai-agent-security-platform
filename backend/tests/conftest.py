@@ -44,7 +44,10 @@ def _schema():
 def _clean_stores():
     """Every test starts from empty stores, in both databases."""
     with SessionLocal() as session:
-        session.execute(text("TRUNCATE agent_events, alerts CASCADE"))
+        # agent_identities has no foreign key to agent_events, so it is not
+        # reached by the cascade and must be named explicitly — otherwise an
+        # operator trust assertion in one test leaks into every later one.
+        session.execute(text("TRUNCATE agent_events, alerts, agent_identities CASCADE"))
         session.commit()
     with get_driver().session() as neo:
         neo.run("MATCH (n) DETACH DELETE n")

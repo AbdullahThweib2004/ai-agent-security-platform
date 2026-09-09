@@ -15,7 +15,15 @@ from app.config import get_settings
 from app.db.neo4j import close_driver, init_constraints, verify_connectivity
 from app.db.postgres import init_db
 from app.logging_config import configure_logging
-from app.routers import alerts, delegations, events, forensics, graph
+from app.routers import (
+    a2a,
+    agents,
+    alerts,
+    delegations,
+    events,
+    forensics,
+    graph,
+)
 from app.schemas.health import HealthResponse
 from app.services.health import health_report
 
@@ -109,10 +117,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(agents.router)
 app.include_router(events.router)
 app.include_router(graph.router)
 app.include_router(alerts.router)
 app.include_router(delegations.router)
+app.include_router(a2a.router)
 app.include_router(forensics.router)
 
 

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.baseline import MIN_BASELINE_EVENTS
 from app.services.graph_service import _health_of
+from app.services.trust import MIN_BASELINE_EVENTS
 
 
 def node(node_type="agent", suspicious_count=0):

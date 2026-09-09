@@ -34,12 +34,31 @@ const PERMISSION = {
   blocked: { label: 'Blocked', icon: '⊘', cls: 'text-status-critical border-status-critical/40 bg-status-critical/10' },
 }
 
+// Interaction outcomes are binary — there is no partial conversation — so this
+// reuses the same green/red the other sets use for the same meanings.
+const INTERACTION = {
+  allowed: { label: 'Allowed', icon: '✓', cls: 'text-status-good border-status-good/40 bg-status-good/10' },
+  blocked: { label: 'Blocked', icon: '⊘', cls: 'text-status-critical border-status-critical/40 bg-status-critical/10' },
+}
+
+// Trust is a classification, not a severity, but it does order by how much
+// scrutiny an analyst should apply — so it borrows the same scale, and every
+// level carries an icon and a word so hue is never the only signal.
+const TRUST = {
+  internal: { label: 'Internal', icon: '⌂', cls: 'text-status-good border-status-good/40 bg-status-good/10' },
+  external_trusted: { label: 'External · trusted', icon: '✓', cls: 'text-accent border-accent/40 bg-accent/10' },
+  external_untrusted: { label: 'External · untrusted', icon: '⊘', cls: 'text-status-critical border-status-critical/40 bg-status-critical/10' },
+  unrated: { label: 'Unrated', icon: '?', cls: 'text-status-serious border-status-serious/40 bg-status-serious/10' },
+}
+
 const SETS = {
   health: HEALTH,
   severity: SEVERITY,
   status: PLATFORM_STATUS,
   delegation: DELEGATION,
   permission: PERMISSION,
+  interaction: INTERACTION,
+  trust: TRUST,
 }
 
 export default function StatusBadge({ kind = 'health', value, size = 'md' }) {

@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import StatusBadge from './StatusBadge'
 import { Loading } from './States'
 import { shortTime } from '../lib/format'
@@ -20,6 +21,13 @@ export default function DelegationDetail({ delegation, loading }) {
     )
 
   const { permission_decisions: verdicts = [] } = delegation
+  // A delegation refused before it was evaluated cites the interaction decision
+  // by id in its reason. Surface that as a link when present.
+  const upstreamId = delegation.reason?.includes('refused upstream')
+    ? delegation.reason.match(
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+      )?.[0]
+    : null
   const granted = delegation.granted_permissions ?? []
   const requested = delegation.requested_permissions ?? []
 
@@ -40,6 +48,20 @@ export default function DelegationDetail({ delegation, loading }) {
           <StatusBadge kind="delegation" value={delegation.decision} size="sm" />
         </div>
         <p className="mt-2 text-xs leading-relaxed text-ink-muted">{delegation.reason}</p>
+        {upstreamId && (
+          // The reason already names the interaction decision textually; this
+          // makes it navigable, so "refused upstream" is not a dead end for
+          // whoever is reading. The id is parsed out of the reason rather than
+          // carried as a field — see the note in the README about promoting it
+          // to a real foreign key.
+          <Link
+            to={`/interactions/${upstreamId}`}
+            className="mt-2 inline-flex items-center gap-1.5 rounded border border-edge bg-raised px-2 py-1 text-[11px] text-ink-muted hover:border-accent hover:text-ink"
+          >
+            <span aria-hidden="true">⊘</span>
+            View the interaction decision that refused this →
+          </Link>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3 border-t border-edge pt-3">

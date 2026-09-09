@@ -316,12 +316,49 @@ def test_a_handoff_to_an_unrated_agent_is_refused_outright(client, post_event):
     assert decision["decision"] == "blocked"
     assert decision["requested_permissions"] == ["fx:read"]
     assert decision["granted_permissions"] == []
-    assert "unrated_delegate" in decision["reason"]
 
+    # Since Phase 4 this is refused one layer earlier: interaction policy
+    # declines the conversation, and delegation cites that decision instead of
+    # re-deriving the same "counterparty is unrated" finding under its own rule
+    # name. The outcome is unchanged; the attribution is no longer duplicated.
+    assert "refused upstream by interaction policy" in decision["reason"]
     verdict = decision["permission_decisions"][0]
-    assert verdict["rule"] == "unrated_delegate"
+    assert verdict["rule"] == "upstream_a2a_block"
     assert verdict["granted_as"] is None
-    assert "unrated" in verdict["reason"]
+    assert "unrated" in verdict["reason"], "the upstream reason still explains why"
+
+
+def test_unrated_delegate_still_fires_where_a2a_does_not_reach(client, post_event):
+    """The rule is not dead: A2A covers agent -> agent, this is user -> agent.
+
+    A person delegating to an agent nobody can vouch for is still refused, by
+    delegation's own rule, because no interaction verdict exists to cite.
+    """
+    for i in range(4):
+        post_event(
+            actor_type="user",
+            actor_id="analyst-1",
+            target_id="fx-rate-tool",
+            target_type="tool",
+            action_type="tool_call",
+            permissions_used=["fx:read"],
+            timestamp=(BASE_TIME + timedelta(minutes=i)).isoformat(),
+        )
+    handoff = post_event(
+        actor_type="user",
+        actor_id="analyst-1",
+        target_id="brand-new-helper",
+        target_type="agent",
+        action_type="delegation",
+        permissions_used=[],
+        metadata={"requested_permissions": ["fx:read"]},
+        timestamp=(BASE_TIME + timedelta(hours=1)).isoformat(),
+    )
+
+    decision = delegation_for(client, handoff)
+    assert decision["decision"] == "blocked"
+    assert "unrated_delegate" in decision["reason"]
+    assert decision["permission_decisions"][0]["rule"] == "unrated_delegate"
 
 
 def test_the_incident_delegation_is_reachable_by_filter(client, banking_incident):
@@ -333,3 +370,78 @@ def test_the_incident_delegation_is_reachable_by_filter(client, banking_incident
     scoped = client.get("/delegations?delegate_id=external-agent-x").json()
     assert len(scoped) == 1
     assert scoped[0]["decision"] == "blocked"
+
+
+# --- A2A: the interaction gate, before anything is delegated ----------------
+def a2a_for(session, event_body):
+    from app.models.a2a import A2ADecision
+
+    event_id = event_body["event"]["event_id"]
+    return session.query(A2ADecision).filter_by(event_id=event_id).one_or_none()
+
+
+def test_the_incident_handoff_is_also_refused_at_the_interaction_layer(
+    client, session, banking_incident
+):
+    """Pinned: payment-agent -> external-agent-x is blocked before delegation.
+
+    Two independent layers refuse this handoff for different reasons. Delegation
+    refuses the authority; A2A refuses the conversation. This pins the second.
+    """
+    decision = a2a_for(session, banking_incident["handoff"])
+
+    assert decision is not None
+    assert decision.requester_id == "payment-agent"
+    assert decision.target_id == "external-agent-x"
+    assert decision.decision == "blocked"
+    assert decision.rule == "unrated_counterparty"
+    assert decision.target_trust == "unrated"
+    assert "external-agent-x is unrated" in decision.reason
+    assert "too little history to accept an interaction with" in decision.reason
+
+
+def test_the_legitimate_handoff_is_allowed_at_the_interaction_layer(
+    client, session, banking_incident
+):
+    """The gate must not refuse the ordinary path it sits on."""
+    decision = a2a_for(session, banking_incident["approve"])
+    assert decision.decision == "allowed"
+    assert decision.rule == "default_allow"
+    assert decision.requester_id == "finance-agent"
+    assert decision.target_id == "payment-agent"
+
+
+def test_an_operator_assertion_stops_the_next_attempt_at_the_door(
+    client, post_event, session, banking_incident
+):
+    """The lever: after the incident, classify it and the next probe is refused.
+
+    Blocked by identity rather than by looking anomalous all over again — which
+    is the whole point of separating trust from behaviour.
+    """
+    client.post(
+        "/agents/external-agent-x/trust", json={"trust_level": "external_untrusted"}
+    )
+    probe = post_event(
+        actor_id="external-agent-x",
+        target_id="payment-agent",
+        target_type="agent",
+        action_type="agent_message",
+        permissions_used=["agent:status"],
+        timestamp=(
+            BASE_TIME + timedelta(days=len(NORMAL_INVOICES), hours=11)
+        ).isoformat(),
+    )
+
+    decision = a2a_for(session, probe)
+    assert decision.decision == "blocked"
+    assert decision.rule == "untrusted_party"
+    assert decision.requester_trust == "external_untrusted"
+    assert "regardless of what was requested" in decision.reason
+
+
+def test_user_directed_delegations_are_not_agent_to_agent(
+    client, session, banking_incident
+):
+    """analyst-1 is a person. A person directing an agent is not A2A traffic."""
+    assert a2a_for(session, banking_incident["root"]) is None

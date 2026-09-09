@@ -23,10 +23,10 @@ from app.schemas.graph import (
 )
 from app.services.baseline import (
     _EXCLUDED_FROM_BASELINE,
-    MIN_BASELINE_EVENTS,
     AgentBaseline,
     compute_baseline,
 )
+from app.services.trust import is_rated
 
 
 def _alert_counts_by_actor(session: Session) -> dict[str, int]:
@@ -59,7 +59,7 @@ def _health_of(node: dict, alert_count: int, clean_count: int) -> str:
     """
     if alert_count > 0 or node["suspicious_count"] > 0:
         return "suspicious"
-    if node["type"] == "agent" and clean_count < MIN_BASELINE_EVENTS:
+    if node["type"] == "agent" and not is_rated(clean_count):
         return "unrated"
     return "healthy"
 

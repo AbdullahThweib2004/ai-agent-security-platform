@@ -35,6 +35,14 @@ export const getDelegations = (params = {}) => {
   return get(`/delegations${q ? `?${q}` : ''}`)
 }
 export const getDelegation = (delegationId) => get(`/delegations/${delegationId}`)
+
+export const getA2ADecisions = (params = {}) => {
+  const q = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
+  ).toString()
+  return get(`/a2a-decisions${q ? `?${q}` : ''}`)
+}
+export const getA2ADecision = (decisionId) => get(`/a2a-decisions/${decisionId}`)
 export const getEvents = (params = {}) => {
   const q = new URLSearchParams(
     Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
