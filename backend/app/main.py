@@ -15,7 +15,7 @@ from app.config import get_settings
 from app.db.neo4j import close_driver, init_constraints, verify_connectivity
 from app.db.postgres import init_db
 from app.logging_config import configure_logging
-from app.routers import alerts, events, forensics, graph
+from app.routers import alerts, delegations, events, forensics, graph
 from app.schemas.health import HealthResponse
 from app.services.health import health_report
 
@@ -112,6 +112,7 @@ app.add_middleware(
 app.include_router(events.router)
 app.include_router(graph.router)
 app.include_router(alerts.router)
+app.include_router(delegations.router)
 app.include_router(forensics.router)
 
 

@@ -12,8 +12,10 @@ from sqlalchemy.orm import Session
 
 from app.db.neo4j import get_driver, project_event
 from app.db.postgres import get_session
+from app.models.delegation import Delegation
 from app.models.event import AgentEvent, Alert
 from app.schemas.alert import AlertRule
+from app.schemas.delegation import DelegationDecision
 from app.schemas.errors import (
     BAD_REQUEST,
     CONFLICT,
@@ -22,6 +24,7 @@ from app.schemas.errors import (
     UNPROCESSABLE,
 )
 from app.schemas.event import (
+    ActionType,
     AgentEventCreate,
     AgentEventOut,
     AlertOut,
@@ -29,6 +32,7 @@ from app.schemas.event import (
     IngestResponse,
     event_to_out,
 )
+from app.services import delegation_policy
 from app.services.anomaly import evaluate
 from app.services.baseline import compute_baseline
 from app.services.reconcile import reconcile as run_reconcile
@@ -209,6 +213,47 @@ def ingest_event(
                 # The evidence (`details`) is intentionally not logged: it
                 # restates amounts, queries and counterparties. It is durable
                 # in Postgres and reachable via GET /alerts/{alert_id}.
+            },
+        )
+
+    # A delegation is still an event, so it runs on this same path rather than a
+    # parallel pipeline: same request, same transaction, same staged write as
+    # alerts. Only the extra decision is delegation-specific.
+    delegation = None
+    if event.action_type == ActionType.DELEGATION.value:
+        verdict = delegation_policy.decide(session, event)
+        delegation = Delegation(
+            event_id=event.event_id,
+            delegator_id=verdict.delegator_id,
+            delegate_id=verdict.delegate_id,
+            requested_permissions=verdict.requested_permissions,
+            granted_permissions=verdict.granted_permissions,
+            permission_decisions=verdict.permission_decisions(),
+            decision=verdict.decision,
+            reason=verdict.reason,
+        )
+        session.add(delegation)
+        session.flush()
+
+        # A delegation the policy refused or trimmed is a security-relevant
+        # outcome, not routine traffic — it says an agent asked for more
+        # authority than it was allowed to hand on.
+        refused = verdict.decision != DelegationDecision.ALLOWED.value
+        logger.log(
+            logging.WARNING if refused else logging.INFO,
+            "delegation decided",
+            extra={
+                "event": "delegation.decided",
+                "delegation_id": str(delegation.delegation_id),
+                "event_id": str(event.event_id),
+                "delegator_id": verdict.delegator_id,
+                "delegate_id": verdict.delegate_id,
+                "decision": verdict.decision,
+                # Counts and rule names only; the permission names themselves
+                # stay in Postgres with the rest of the event detail.
+                "requested_count": len(verdict.requested_permissions),
+                "granted_count": len(verdict.granted_permissions),
+                "rules_applied": sorted({v.rule for v in verdict.verdicts}),
             },
         )
 

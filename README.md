@@ -5,14 +5,18 @@
 A security layer that monitors and governs autonomous AI agents inside an organization —
 their actions, tool calls, delegations, and communication with other agents.
 
-**MVP scope (this phase): two capabilities only.**
+**Scope: three capabilities.**
 
 1. **Agent Behavior Graph** — every agent action becomes an event; entities and their
    relationships are projected into a graph you can explore and baseline.
 2. **Agent Forensics** — reconstruct the full causal chain of any incident by walking
    event parent/child links.
 
-Explicitly *not* in scope yet: Delegation Security, A2A Security, Incident Response.
+3. **Delegation Security** — when one agent hands work to another, decide what
+   authority travels with it. A delegate receives the least privilege the task
+   needs, never an automatic copy of the delegator's permission set.
+
+Explicitly *not* in scope yet: A2A Security, Incident Response.
 
 ---
 
@@ -92,6 +96,8 @@ Every agent action is one **Agent Event**:
 | `GET` | `/events/{event_id}` | A single event |
 | `GET` | `/alerts` | Rule-based anomaly findings, with the triggering event inline |
 | `GET` | `/alerts/{alert_id}` | A single alert with full detail |
+| `GET` | `/delegations` | Delegation decisions, filterable by delegator, delegate, decision |
+| `GET` | `/delegations/{delegation_id}` | One decision with its permission-by-permission reasoning |
 | `GET` | `/forensics/timeline/{event_id}` | Full causal chain for an event |
 | `POST` | `/events/reconcile` | Re-project events that reached Postgres but not the graph |
 | `GET` | `/health` | Liveness **and** dependency health (503 if a store is unreachable) |
@@ -102,6 +108,30 @@ never modified, while the platform records its conclusion separately in
 `platform_status`. **Every suspicion-aware read path — `/graph`, `/alerts`, the
 agent list — consults `platform_status`.** A caller submitting `status` alone is
 still accepted; it is treated as `reported_status`.
+
+## Delegation policy (least privilege)
+
+Every `delegation` event is judged permission by permission, on the same ingest
+path as everything else — same request, same transaction. Three rules:
+
+| Rule | Effect |
+|---|---|
+| `confinement` | A delegator can never pass on authority it does not itself hold — hard block |
+| `sensitive_category` | Customer data, administrative control, money movement and egress are never auto-granted; reduced to a read-only form where one exists and the delegator holds it, otherwise blocked |
+| `unrated_delegate` | A delegate below the cold-start threshold receives nothing, whatever it asked for |
+
+Precedence resolves *attribution*; restriction resolves the *outcome*. Rules run
+in the order above and the first block is terminal, but a `limited` verdict is
+provisional — a later rule may still downgrade it to blocked, never upgrade it.
+That is what makes the unrated rule hold "regardless of what was requested".
+
+A reduction is only granted if the delegator holds the reduced form too.
+Otherwise the downgrade would manufacture authority out of nothing and defeat
+the confinement rule through the back door.
+
+Delegations declare what they want in `metadata.requested_permissions`. When
+absent — as in any emitter predating this feature — `permissions_used` is used
+instead, so existing traffic is governed with no backfill and no schema change.
 
 ## Anomaly rules (rule-based only — no ML in this phase)
 
@@ -168,6 +198,7 @@ the incident is not buried in noise. The script prints a ready-to-run
 | Agents | `/` | Every agent with its status, alert count, and activity. Suspicious agents sort to the top |
 | Behavior Graph | `/graph`, `/graph/{agent_id}` | Interactive force-directed graph. Suspicious nodes carry a red ring, suspicious edges are drawn red and animated. Selecting an agent shows its baseline |
 | Alerts | `/alerts`, `/alerts/{alert_id}` | Triage queue sorted by severity, filterable by rule and severity. The detail panel shows the evidence that produced each alert |
+| Delegations | `/delegations`, `/delegations/{id}` | Every handoff with a granted/requested ratio for at-a-glance scanning; the detail panel breaks down each requested permission, its verdict, the rule and the reason |
 | Forensics | `/forensics`, `/forensics/{event_id}` | Top-to-bottom incident timeline, indented by causal depth, with alerts inline |
 
 Agent status has **three** states, not two:
@@ -315,7 +346,7 @@ That spins up throwaway databases on their own ports under their own Compose
 project (`aasec-test`), so it never touches the dev stack or its seeded data.
 Postgres runs on tmpfs, so every run starts from nothing.
 
-**210 tests, 98% statement coverage.**
+**298 tests, 98% statement coverage.**
 
 | Area | What is pinned |
 |---|---|
@@ -334,6 +365,8 @@ Postgres runs on tmpfs, so every run starts from nothing.
 | `tests/integration/test_ingest_logging.py` | The ingest path's log events and levels, and that metadata never leaks into logs |
 | `tests/integration/test_reconcile_logging.py` | Staged-write failure and quarantine logging |
 | `tests/integration/test_health.py` | `/health` against genuinely dead servers and a hanging dependency |
+| `tests/unit/test_delegation_policy.py` | Each delegation rule in isolation, precedence, and the reduction boundaries |
+| `tests/integration/test_delegations_api.py` | Both delegation routes, every filter, and that `requested_permissions` governs over `permissions_used` |
 
 The suite is mutation-checked — breaking the cold-start threshold, letting
 suspicious events back into baselines, downgrading `blocked`, or swapping the
@@ -372,7 +405,7 @@ The MVP is hardened across four areas. Each was verified rather than assumed:
 
 | | Covers | Evidence |
 |---|---|---|
-| **1. Test suite** | Unit, integration and regression tests against **real** Postgres and Neo4j | 210 tests, 98% coverage; mutation-checked — breaking the cold-start threshold, letting suspicious events into baselines, downgrading `blocked`, or swapping `MERGE` for `CREATE` each makes it fail |
+| **1. Test suite** | Unit, integration and regression tests against **real** Postgres and Neo4j | 298 tests, 98% coverage; mutation-checked — breaking the cold-start threshold, letting suspicious events into baselines, downgrading `blocked`, or swapping `MERGE` for `CREATE` each makes it fail |
 | **2. Errors & validation** | Every endpoint audited against bad input; staged-write reconciliation | 38 bad-input cases all return 4xx, none 2xx or 5xx; five real defects found and fixed; the Postgres-committed/graph-failed window asserted as a state transition and healed |
 | **3. CI** | ruff, black, full suite against pinned service containers, frontend build, behind one required gate | Green on GitHub; every gate verified by deliberately breaking it on a throwaway branch |
 | **4. Observability** | JSON structured logging across the ingest path; real dependency health checks | Logs verified on a live stack; `/health` returns 503 in ~18ms naming the specific dead store; tests assert sensitive metadata never reaches logs |
@@ -396,3 +429,4 @@ Known limitations, recorded rather than hidden:
 - [x] Hardening 2 — error handling, input validation, staged-write reconciliation
 - [x] Hardening 3 — CI pipeline (tests, lint, format, frontend build)
 - [x] Hardening 4 — structured JSON logging and real dependency health checks
+- [x] Phase 3 — Delegation Security (policy engine, API, tests, UI)

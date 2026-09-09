@@ -28,8 +28,9 @@ def init_db() -> None:
     Fine for an MVP; a migration tool (Alembic) is the answer once the schema
     starts evolving against real data.
     """
-    # Import for side effects so every model is registered on Base.metadata.
-    from app.models import event as _event  # noqa: F401
+    # Import for side effects: the package registers every model on
+    # Base.metadata, so adding a model cannot be missed here.
+    import app.models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
 

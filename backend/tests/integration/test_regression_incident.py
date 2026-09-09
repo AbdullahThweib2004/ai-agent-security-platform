@@ -229,3 +229,107 @@ def test_the_flagged_payment_never_widens_the_baseline(client, banking_incident)
     assert baseline["usual_agents_contacted"] == []
     assert "bank:admin" not in baseline["usual_permissions"]
     assert "db:read_pii" not in baseline["usual_permissions"]
+
+
+# --- delegation security: the same incident, judged as a handoff ------------
+def delegation_for(client, event_body):
+    event_id = event_body["event"]["event_id"]
+    rows = [d for d in client.get("/delegations").json() if d["event_id"] == event_id]
+    assert len(rows) == 1, f"expected one delegation decision for {event_id}"
+    return rows[0]
+
+
+def test_the_incident_handoff_is_refused_by_delegation_policy(client, banking_incident):
+    """Pinned: payment-agent -> external-agent-x is BLOCKED, permission by permission.
+
+    This is the handoff at the centre of the incident — the payout leaving for an
+    agent nobody has ever seen. The anomaly rules already flag the event; this
+    asserts the authority itself never travelled with it.
+    """
+    decision = delegation_for(client, banking_incident["handoff"])
+
+    assert decision["delegator_id"] == "payment-agent"
+    assert decision["delegate_id"] == "external-agent-x"
+    assert decision["decision"] == "blocked"
+    assert decision["requested_permissions"] == ["bank:transfer", "bank:admin"]
+    assert decision["granted_permissions"] == []
+
+    verdicts = {v["permission"]: v for v in decision["permission_decisions"]}
+    assert set(verdicts) == {"bank:transfer", "bank:admin"}
+
+    # payment-agent does hold bank:transfer, so confinement passes; it is money
+    # movement, so the reduced form bank:read would be granted instead — but
+    # payment-agent does not hold that either, so nothing is granted.
+    transfer = verdicts["bank:transfer"]
+    assert transfer["decision"] == "blocked"
+    assert transfer["rule"] == "sensitive_category"
+    assert transfer["granted_as"] is None
+    assert "money movement" in transfer["reason"]
+    assert "does not hold that either" in transfer["reason"]
+
+    # payment-agent has never held bank:admin at all.
+    admin = verdicts["bank:admin"]
+    assert admin["decision"] == "blocked"
+    assert admin["rule"] == "confinement"
+    assert admin["granted_as"] is None
+    assert "never held" in admin["reason"]
+
+
+def test_the_legitimate_handoff_in_the_same_chain_is_still_allowed(
+    client, banking_incident
+):
+    """Least privilege must not break the normal path it sits on."""
+    decision = delegation_for(client, banking_incident["approve"])
+    assert decision["delegator_id"] == "finance-agent"
+    assert decision["delegate_id"] == "payment-agent"
+    assert decision["decision"] == "allowed"
+    assert decision["granted_permissions"] == ["payments:initiate"]
+    assert decision["permission_decisions"][0]["rule"] == "default_allow"
+
+
+def test_a_handoff_to_an_unrated_agent_is_refused_outright(client, post_event):
+    """Pinned: the cold-start block, on a permission the delegator plainly holds.
+
+    finance-agent holds fx:read and fx:read is not sensitive, so only one thing
+    can refuse this — the delegate having no history to vouch for it.
+    """
+    for i in range(4):
+        post_event(
+            actor_id="finance-agent",
+            target_id="fx-rate-tool",
+            target_type="tool",
+            action_type="tool_call",
+            permissions_used=["fx:read"],
+            timestamp=(BASE_TIME + timedelta(minutes=i)).isoformat(),
+        )
+    handoff = post_event(
+        actor_id="finance-agent",
+        target_id="brand-new-helper",
+        target_type="agent",
+        action_type="delegation",
+        permissions_used=[],
+        metadata={"requested_permissions": ["fx:read"]},
+        timestamp=(BASE_TIME + timedelta(hours=1)).isoformat(),
+    )
+
+    decision = delegation_for(client, handoff)
+    assert decision["decision"] == "blocked"
+    assert decision["requested_permissions"] == ["fx:read"]
+    assert decision["granted_permissions"] == []
+    assert "unrated_delegate" in decision["reason"]
+
+    verdict = decision["permission_decisions"][0]
+    assert verdict["rule"] == "unrated_delegate"
+    assert verdict["granted_as"] is None
+    assert "unrated" in verdict["reason"]
+
+
+def test_the_incident_delegation_is_reachable_by_filter(client, banking_incident):
+    """An analyst asking 'what was blocked?' must find this without knowing ids."""
+    blocked = client.get("/delegations?decision=blocked").json()
+    pairs = {(d["delegator_id"], d["delegate_id"]) for d in blocked}
+    assert ("payment-agent", "external-agent-x") in pairs
+
+    scoped = client.get("/delegations?delegate_id=external-agent-x").json()
+    assert len(scoped) == 1
+    assert scoped[0]["decision"] == "blocked"

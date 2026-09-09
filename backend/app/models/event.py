@@ -99,6 +99,12 @@ class AgentEvent(Base):
         back_populates="event",
         cascade="all, delete-orphan",
     )
+    delegation = relationship(
+        "Delegation",
+        back_populates="event",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
     __table_args__ = (
         Index("ix_agent_events_actor_id", "actor_id"),

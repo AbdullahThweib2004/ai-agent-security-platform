@@ -19,7 +19,28 @@ const PLATFORM_STATUS = {
   blocked: { label: 'Blocked', icon: '⊘', cls: 'text-status-warning border-status-warning/40 bg-status-warning/10' },
 }
 
-const SETS = { health: HEALTH, severity: SEVERITY, status: PLATFORM_STATUS }
+// Delegation outcomes reuse the same colour vocabulary as agent health and
+// alert severity: green means nothing was cut, amber means partially cut, red
+// means refused. An analyst who has learned the palette once reads it here too.
+const DELEGATION = {
+  allowed: { label: 'Allowed', icon: '✓', cls: 'text-status-good border-status-good/40 bg-status-good/10' },
+  limited: { label: 'Limited', icon: '◆', cls: 'text-status-warning border-status-warning/40 bg-status-warning/10' },
+  blocked: { label: 'Blocked', icon: '⊘', cls: 'text-status-critical border-status-critical/40 bg-status-critical/10' },
+}
+
+const PERMISSION = {
+  allowed: { label: 'Allowed', icon: '✓', cls: 'text-status-good border-status-good/40 bg-status-good/10' },
+  limited: { label: 'Reduced', icon: '◆', cls: 'text-status-warning border-status-warning/40 bg-status-warning/10' },
+  blocked: { label: 'Blocked', icon: '⊘', cls: 'text-status-critical border-status-critical/40 bg-status-critical/10' },
+}
+
+const SETS = {
+  health: HEALTH,
+  severity: SEVERITY,
+  status: PLATFORM_STATUS,
+  delegation: DELEGATION,
+  permission: PERMISSION,
+}
 
 export default function StatusBadge({ kind = 'health', value, size = 'md' }) {
   const spec = SETS[kind]?.[value] ?? {

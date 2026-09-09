@@ -27,6 +27,14 @@ export const getAlerts = (params = {}) => {
 }
 export const getAlert = (alertId) => get(`/alerts/${alertId}`)
 export const getTimeline = (eventId) => get(`/forensics/timeline/${eventId}`)
+
+export const getDelegations = (params = {}) => {
+  const q = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
+  ).toString()
+  return get(`/delegations${q ? `?${q}` : ''}`)
+}
+export const getDelegation = (delegationId) => get(`/delegations/${delegationId}`)
 export const getEvents = (params = {}) => {
   const q = new URLSearchParams(
     Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')

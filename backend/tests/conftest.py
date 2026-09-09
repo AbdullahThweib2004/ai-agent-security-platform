@@ -31,7 +31,7 @@ def _schema():
     existing table — so dropping first is what keeps the suite honest when a
     column is added or changed.
     """
-    import app.models.event  # noqa: F401  (register the models on Base)
+    import app.models  # noqa: F401  (registers every model on Base)
 
     Base.metadata.drop_all(bind=engine)
     init_db()

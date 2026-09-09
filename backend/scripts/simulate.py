@@ -113,10 +113,21 @@ def emit(
     metadata=None,
     parent=None,
     reported_status="allowed",
+    requested=None,
 ):
-    """Send one event and return its ingest response."""
+    """Send one event and return its ingest response.
+
+    ``requested`` declares the authority a delegate is asking to receive. The
+    policy engine falls back to ``permissions_used`` when it is absent, but a
+    delegation should say what it wants explicitly — the two are different
+    facts, and only the explicit form can express asking for more (or less) than
+    the delegator is exercising.
+    """
     actor_type, actor_id = actor
     target_type, target_id = target
+    metadata = dict(metadata or {})
+    if requested is not None:
+        metadata["requested_permissions"] = list(requested)
     payload = {
         "timestamp": at.isoformat(),
         "actor_type": actor_type,
@@ -126,7 +137,7 @@ def emit(
         "action_type": action_type,
         "permissions_used": permissions,
         "reported_status": reported_status,
-        "metadata": metadata or {},
+        "metadata": metadata,
     }
     if parent:
         payload["parent_event_id"] = parent
@@ -164,6 +175,7 @@ def seed_normal(start: datetime, days: int = 14) -> int:
                 FINANCE,
                 "delegation",
                 permissions=["finance:request_payment"],
+                requested=["finance:request_payment"],
                 at=at,
                 metadata={"vendor": vendor, "invoice": invoice, "channel": "ap-portal"},
             )
@@ -185,6 +197,7 @@ def seed_normal(start: datetime, days: int = 14) -> int:
                 PAYMENT,
                 "delegation",
                 permissions=["payments:initiate"],
+                requested=["payments:initiate"],
                 at=at + timedelta(minutes=1),
                 metadata={
                     "amount": amount,
@@ -259,6 +272,7 @@ def seed_incident(at: datetime) -> tuple[int, str]:
         FINANCE,
         "delegation",
         permissions=["finance:request_payment"],
+        requested=["finance:request_payment"],
         at=at,
         metadata={
             "vendor": "Globex Consulting",
@@ -274,6 +288,7 @@ def seed_incident(at: datetime) -> tuple[int, str]:
         PAYMENT,
         "delegation",
         permissions=["payments:initiate"],
+        requested=["payments:initiate"],
         at=at + timedelta(minutes=1),
         metadata={
             "amount": 880_000.00,
@@ -294,6 +309,10 @@ def seed_incident(at: datetime) -> tuple[int, str]:
         EXTERNAL,
         "delegation",
         permissions=["bank:transfer", "bank:admin"],
+        # The handoff asks for more than it is exercising: the payout rights it
+        # is using, plus administrative control and customer data it is not.
+        # Only the explicit form can express that gap.
+        requested=["bank:transfer", "bank:admin", "db:read_pii"],
         at=at + timedelta(minutes=2),
         metadata={
             "amount": 880_000.00,
