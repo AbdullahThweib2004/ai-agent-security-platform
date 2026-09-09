@@ -315,7 +315,7 @@ That spins up throwaway databases on their own ports under their own Compose
 project (`aasec-test`), so it never touches the dev stack or its seeded data.
 Postgres runs on tmpfs, so every run starts from nothing.
 
-**209 tests, 98% statement coverage.**
+**210 tests, 98% statement coverage.**
 
 | Area | What is pinned |
 |---|---|
@@ -372,7 +372,7 @@ The MVP is hardened across four areas. Each was verified rather than assumed:
 
 | | Covers | Evidence |
 |---|---|---|
-| **1. Test suite** | Unit, integration and regression tests against **real** Postgres and Neo4j | 209 tests, 98% coverage; mutation-checked — breaking the cold-start threshold, letting suspicious events into baselines, downgrading `blocked`, or swapping `MERGE` for `CREATE` each makes it fail |
+| **1. Test suite** | Unit, integration and regression tests against **real** Postgres and Neo4j | 210 tests, 98% coverage; mutation-checked — breaking the cold-start threshold, letting suspicious events into baselines, downgrading `blocked`, or swapping `MERGE` for `CREATE` each makes it fail |
 | **2. Errors & validation** | Every endpoint audited against bad input; staged-write reconciliation | 38 bad-input cases all return 4xx, none 2xx or 5xx; five real defects found and fixed; the Postgres-committed/graph-failed window asserted as a state transition and healed |
 | **3. CI** | ruff, black, full suite against pinned service containers, frontend build, behind one required gate | Green on GitHub; every gate verified by deliberately breaking it on a throwaway branch |
 | **4. Observability** | JSON structured logging across the ingest path; real dependency health checks | Logs verified on a live stack; `/health` returns 503 in ~18ms naming the specific dead store; tests assert sensitive metadata never reaches logs |
