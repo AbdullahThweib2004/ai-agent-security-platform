@@ -9,8 +9,8 @@ import Forensics from './pages/Forensics'
 
 const Placeholder = ({ name }) => (
   <div className="rounded-lg border border-dashed border-edge bg-panel p-8 text-ink-muted">
-    <h2 className="text-base font-semibold text-ink">{name}</h2>
-    <p className="mt-1 text-sm">Not built yet.</p>
+    <h2 className="text-heading font-semibold text-ink">{name}</h2>
+    <p className="mt-1 text-body">Not built yet.</p>
   </div>
 )
 
@@ -31,11 +31,11 @@ export default function App() {
         <div className="mx-auto flex max-w-7xl items-center gap-8 px-6 py-3">
           <div className="flex items-center gap-2">
             <span aria-hidden="true" className="text-accent">◈</span>
-            <span className="text-sm font-semibold tracking-tight">
+            <span className="text-heading font-semibold tracking-tight">
               AI Agent Security
             </span>
           </div>
-          <nav className="flex gap-1 text-sm">
+          <nav className="flex gap-1 text-body">
             {tabs.map((t) => (
               <NavLink
                 key={t.to}
@@ -44,8 +44,8 @@ export default function App() {
                 className={({ isActive }) =>
                   `rounded-md px-3 py-1.5 transition-colors ${
                     isActive
-                      ? 'bg-raised text-ink'
-                      : 'text-ink-muted hover:text-ink'
+                      ? 'bg-raised font-medium text-ink'
+                      : 'text-ink-muted hover:bg-panel hover:text-ink'
                   }`
                 }
               >

@@ -2,8 +2,43 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------------------------------------------------------------------------
+   Design tokens — the only place in the codebase a colour literal appears.
+   Values are space-separated RGB channels so Tailwind can compose them with
+   its alpha modifiers (bg-status-critical/10 and friends stay working), and so
+   the graph canvas can read the same properties instead of keeping its own
+   copy of the palette.
+
+   Contrast figures are measured against --surface. Anything used as TEXT at
+   11-13px must clear 4.5:1; anything used only as a mark (rail, fill, border,
+   graph ring) needs 3:1. That distinction is why `critical` has two steps.
+   --------------------------------------------------------------------------- */
 :root {
   color-scheme: dark;
+
+  /* Console surfaces (dark by design — this is an operator tool). */
+  --surface: 18 21 28;    /* #12151c  base */
+  --panel: 24 29 39;      /* #181d27  1.08:1 */
+  --raised: 31 37 50;     /* #1f2532  1.19:1 */
+  --edge: 43 52 70;       /* #2b3446  1.46:1 */
+  --edge-strong: 59 70 94; /* #3b465e  graph idle edges, scrollbar hover */
+
+  /* Text. ink-faint carries column heads and timestamps, so it clears AA. */
+  --ink: 230 233 239;       /* #e6e9ef  15.02:1 */
+  --ink-muted: 152 162 184; /* #98a2b8   7.13:1 */
+  --ink-faint: 135 145 173; /* #8791ad   5.81:1 on surface, 4.88:1 on raised */
+
+  /* Reserved for what the analyst is doing — focus, selection, links.
+     Never a status, never a series colour. */
+  --accent: 57 135 229;   /* #3987e5   5.02:1 */
+
+  /* The attention ramp. Fixed, never themed, never reused as a series colour;
+     always shipped with an icon + label so hue is never the only signal. */
+  --status-good: 12 163 12;      /* #0ca30c   5.44:1 */
+  --status-warning: 250 178 25;  /* #fab219   9.96:1 */
+  --status-serious: 236 131 90;  /* #ec835a   6.92:1 */
+  --status-critical: 208 59 59;  /* #d03b3b   3.80:1 — mark step only */
+  --status-critical-ink: 230 103 103; /* #e66767 5.65:1 — the text step */
 }
 
 body {
@@ -16,7 +51,23 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Keyboard focus is visible everywhere, on one ring, without disturbing the
+   mouse path. Replaces the border-colour-only treatment the controls had. */
+:focus-visible {
+  @apply outline-none ring-2 ring-accent ring-offset-1 ring-offset-surface;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: #12151c; }
-::-webkit-scrollbar-thumb { background: #2b3446; border-radius: 5px; }
-::-webkit-scrollbar-thumb:hover { background: #3b465e; }
+::-webkit-scrollbar-track { background: rgb(var(--surface)); }
+::-webkit-scrollbar-thumb { background: rgb(var(--edge)); border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--edge-strong)); }

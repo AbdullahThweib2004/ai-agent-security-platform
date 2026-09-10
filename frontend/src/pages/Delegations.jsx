@@ -7,43 +7,14 @@ import { Empty, ErrorState, Loading } from '../components/States'
 import { useFetch } from '../hooks/useFetch'
 import { getDelegation, getDelegations } from '../lib/api'
 import { relativeTime } from '../lib/format'
+import { ClearFilters, FilterBar, SelectFilter, TextFilter } from '../components/Filters'
+import { railClass } from '../lib/ramp'
+import { rampStep } from '../components/StatusBadge'
 
 // The API's own filter design, mirrored: `decision` is a closed enum, so it is
 // a dropdown and an invalid value cannot be typed. Agent ids are open-ended,
 // so they stay free text.
 const DECISIONS = ['allowed', 'limited', 'blocked']
-
-function DecisionFilter({ value, onChange }) {
-  return (
-    <label className="flex items-center gap-2 text-xs text-ink-faint">
-      Decision
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded border border-edge bg-raised px-2 py-1 text-xs text-ink"
-      >
-        <option value="">any decision</option>
-        {DECISIONS.map((d) => (
-          <option key={d} value={d}>{d}</option>
-        ))}
-      </select>
-    </label>
-  )
-}
-
-function TextFilter({ label, value, onChange, placeholder }) {
-  return (
-    <label className="flex items-center gap-2 text-xs text-ink-faint">
-      {label}
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-40 rounded border border-edge bg-raised px-2 py-1 text-xs text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-      />
-    </label>
-  )
-}
 
 export default function Delegations() {
   const { delegationId } = useParams()
@@ -91,7 +62,7 @@ export default function Delegations() {
     }
   }, [data, selectedId])
 
-  if (loading && !data) return <Loading label="Loading delegations" />
+  if (loading && !data) return <Loading label="Loading delegations" rows={6} />
   if (error) return <ErrorState message={error} onRetry={reload} />
 
   const rows = data ?? []
@@ -105,8 +76,8 @@ export default function Delegations() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold">Delegations</h1>
-        <p className="mt-0.5 text-sm text-ink-muted">
+        <h1 className="text-title font-semibold">Delegations</h1>
+        <p className="mt-1 max-w-[70ch] text-body text-ink-muted">
           What authority travelled when one agent handed work to another. A
           delegate receives the least privilege the task needs — never an
           automatic copy of the delegator's permissions.
@@ -138,8 +109,14 @@ export default function Delegations() {
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-4 rounded-lg border border-edge bg-panel px-3 py-2">
-        <DecisionFilter value={decision} onChange={setDecision} />
+      <FilterBar summary={`${rows.length} shown${restricted > 0 ? ` · ${restricted} restricted` : ''}`}>
+        <SelectFilter
+          label="Decision"
+          value={decision}
+          onChange={setDecision}
+          options={DECISIONS}
+          anyLabel="any decision"
+        />
         <TextFilter
           label="Delegator"
           value={delegatorId}
@@ -152,22 +129,15 @@ export default function Delegations() {
           onChange={setDelegateId}
           placeholder="any agent"
         />
-        {hasFilters && (
-          <button
-            onClick={() => {
-              setDecision('')
-              setDelegatorId('')
-              setDelegateId('')
-            }}
-            className="text-xs text-accent hover:underline"
-          >
-            clear filters
-          </button>
-        )}
-        <span className="ml-auto text-xs text-ink-faint">
-          {rows.length} shown{restricted > 0 && ` · ${restricted} restricted`}
-        </span>
-      </div>
+        <ClearFilters
+          show={Boolean(hasFilters)}
+          onClear={() => {
+            setDecision('')
+            setDelegatorId('')
+            setDelegateId('')
+          }}
+        />
+      </FilterBar>
 
       {rows.length === 0 ? (
         <Empty
@@ -192,18 +162,19 @@ export default function Delegations() {
                       setSelectedId(row.delegation_id)
                       navigate(`/delegations/${row.delegation_id}`, { replace: true })
                     }}
-                    className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors ${
-                      active ? 'bg-raised' : 'bg-surface hover:bg-panel/70'
-                    }`}
+                    className={`flex w-full items-center gap-3 px-3 py-2.5 text-left ${railClass(
+                      rampStep('delegation', row.decision),
+                      active
+                    )}`}
                   >
                     <StatusBadge kind="delegation" value={row.decision} size="sm" />
                     <span className="min-w-0 flex-1">
-                      <span className="flex flex-wrap items-center gap-x-2 text-sm">
+                      <span className="flex flex-wrap items-center gap-x-2 font-mono text-body">
                         <span className="font-medium">{row.delegator_id}</span>
-                        <span className="text-ink-faint">→</span>
+                        <span aria-hidden="true" className="text-ink-faint">→</span>
                         <span className="text-ink-muted">{row.delegate_id}</span>
                       </span>
-                      <span className="mt-0.5 block truncate text-xs text-ink-muted">
+                      <span className="mt-0.5 block truncate text-label text-ink-muted">
                         {row.reason}
                       </span>
                     </span>
@@ -212,23 +183,23 @@ export default function Delegations() {
                         permission still counts as granted, so 1/1 in green
                         would claim nothing was cut when the form was
                         downgraded. */}
-                    <span className="tabular whitespace-nowrap text-right text-xs">
+                    <span className="tabular whitespace-nowrap text-right font-mono text-label">
                       <span
                         className={
                           row.decision === 'allowed'
                             ? 'text-status-good'
                             : row.decision === 'blocked'
-                              ? 'text-status-critical'
+                              ? 'text-status-critical-ink'
                               : 'text-status-warning'
                         }
                       >
                         {granted}/{requested}
                       </span>
-                      <span className="block text-[11px] text-ink-faint">
+                      <span className="block font-sans text-micro normal-case tracking-normal text-ink-faint">
                         {row.decision === 'limited' ? 'reduced' : 'granted'}
                       </span>
                     </span>
-                    <span className="whitespace-nowrap text-xs text-ink-faint">
+                    <span className="whitespace-nowrap font-mono text-label text-ink-faint">
                       {relativeTime(row.decided_at)}
                     </span>
                   </button>

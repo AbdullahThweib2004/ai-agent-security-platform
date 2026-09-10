@@ -1,6 +1,6 @@
 import StatusBadge from './StatusBadge'
 import { ENTITY_ICON, clockTime, money } from '../lib/format'
-import { HEALTH_COLOR, STATUS_COLOR } from '../lib/palette'
+import { healthColor, status, edgeIdle } from '../lib/palette'
 
 const RELATION = {
   self: { label: 'the event you asked about', cls: 'border-accent/60 bg-accent/10 text-accent' },
@@ -9,10 +9,11 @@ const RELATION = {
   related: { label: 'same incident, other branch', cls: 'border-status-warning/50 bg-status-warning/10 text-status-warning' },
 }
 
-const DOT = {
-  suspicious: STATUS_COLOR.critical,
-  blocked: STATUS_COLOR.warning,
-  allowed: '#3b465e',
+// Blocked was yellow here while the delegation and interaction badges painted
+// the same word red. One meaning, one colour.
+const dotColor = (platformStatus) => {
+  if (platformStatus === 'suspicious' || platformStatus === 'blocked') return status.critical
+  return edgeIdle()
 }
 
 export default function TimelineEntry({ entry, isLast }) {
@@ -28,7 +29,7 @@ export default function TimelineEntry({ entry, isLast }) {
         {!isLast && <span className="absolute top-5 h-full w-px bg-edge" aria-hidden="true" />}
         <span
           className="relative z-10 mt-3 h-3 w-3 flex-none rounded-full ring-4 ring-surface"
-          style={{ background: DOT[event.platform_status] ?? DOT.allowed }}
+          style={{ background: dotColor(event.platform_status) }}
           aria-hidden="true"
         />
       </div>
@@ -53,8 +54,12 @@ export default function TimelineEntry({ entry, isLast }) {
             <span className="ml-auto flex items-center gap-2">
               {amount != null && (
                 <span
-                  className="tabular text-xs font-medium"
-                  style={{ color: alerts.some((a) => a.rule_name === 'value_excursion') ? HEALTH_COLOR.suspicious : '#98a2b8' }}
+                  className="tabular text-label font-medium text-ink-muted"
+                  style={{
+                    color: alerts.some((a) => a.rule_name === 'value_excursion')
+                      ? healthColor('suspicious')
+                      : undefined,
+                  }}
                 >
                   {money(amount)}
                 </span>

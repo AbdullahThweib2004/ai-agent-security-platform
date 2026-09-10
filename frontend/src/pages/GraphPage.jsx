@@ -7,7 +7,7 @@ import StatTile from '../components/StatTile'
 import { Empty, ErrorState, Loading } from '../components/States'
 import { useFetch } from '../hooks/useFetch'
 import { getAgentGraph, getGraph } from '../lib/api'
-import { EDGE_IDLE, HEALTH_COLOR, TYPE_COLOR } from '../lib/palette'
+import { accent, edgeIdle, healthColor, inkFaint, inkMuted, panel, surface, traceShape, TYPE_RADIUS, TYPE_SHAPE } from '../lib/palette'
 
 /** Track a container's pixel size so the canvas fills it. */
 function useSize() {
@@ -91,40 +91,55 @@ export default function GraphPage() {
 
   const drawNode = useCallback(
     (node, ctx, globalScale) => {
-      const r = node.type === 'agent' ? 7 : 5.5
-      const ring = HEALTH_COLOR[node.health]
+      const r = TYPE_RADIUS[node.type] ?? 5.5
       const isSelected = node.id === selectedId
+      // D1: shape carries entity type, hue carries health. No five-hue set can
+      // clear the all-pairs CVD gate a force graph needs — the previous
+      // agent/user pair measured ΔE 1.9 under protanopia — so type moved to
+      // the channel that already existed (the ENTITY_ICON glyph vocabulary)
+      // and hue was freed for the one thing an analyst scans for.
+      const healthy = node.health === 'healthy'
+      const fill = healthy ? inkFaint() : healthColor(node.health)
 
-      ctx.beginPath()
-      ctx.arc(node.x, node.y, r, 0, 2 * Math.PI)
-      ctx.fillStyle = TYPE_COLOR[node.type] ?? '#6b7488'
+      traceShape(ctx, TYPE_SHAPE[node.type] ?? 'circle', node.x, node.y, r)
+      ctx.fillStyle = fill
       ctx.fill()
 
-      // A 2px surface ring keeps overlapping marks separable, and carries
-      // health as a second channel on top of the categorical fill.
-      ctx.lineWidth = node.health === 'healthy' ? 1.5 : 2.5
-      ctx.strokeStyle = node.health === 'healthy' ? '#12151c' : ring
+      // A surface-coloured ring keeps overlapping marks separable. Unhealthy
+      // nodes additionally get a halo so they survive a dense cluster.
+      ctx.lineWidth = 1.5
+      ctx.strokeStyle = surface()
       ctx.stroke()
 
+      if (!healthy) {
+        traceShape(ctx, TYPE_SHAPE[node.type] ?? 'circle', node.x, node.y, r + 3)
+        ctx.strokeStyle = fill
+        ctx.lineWidth = 1
+        ctx.globalAlpha = 0.45
+        ctx.stroke()
+        ctx.globalAlpha = 1
+      }
+
       if (isSelected) {
-        ctx.beginPath()
-        ctx.arc(node.x, node.y, r + 4, 0, 2 * Math.PI)
-        ctx.strokeStyle = '#e6e9ef'
+        traceShape(ctx, TYPE_SHAPE[node.type] ?? 'circle', node.x, node.y, r + 6)
+        ctx.strokeStyle = accent()
         ctx.lineWidth = 1.5
         ctx.stroke()
       }
 
       const fontSize = Math.max(10 / globalScale, 2.5)
-      ctx.font = `${fontSize}px ui-sans-serif, system-ui, sans-serif`
+      // Identifiers are monospace everywhere else in the console; the canvas
+      // has to say so itself.
+      ctx.font = `${fontSize}px 'JetBrains Mono Variable', ui-monospace, monospace`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'top'
-      ctx.fillStyle = node.health === 'suspicious' ? HEALTH_COLOR.suspicious : '#98a2b8'
-      ctx.fillText(node.id, node.x, node.y + r + 2)
+      ctx.fillStyle = healthy ? inkMuted() : fill
+      ctx.fillText(node.id, node.x, node.y + r + 3)
     },
     [selectedId]
   )
 
-  if (loading) return <Loading label="Loading behavior graph" />
+  if (loading) return <Loading label="Loading behavior graph" rows={6} />
   if (error) return <ErrorState message={error} onRetry={reload} />
 
   const stats = data?.stats ?? {}
@@ -134,11 +149,11 @@ export default function GraphPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold">
+          <h1 className="text-title font-semibold">
             Behavior Graph
-            {agentId && <span className="text-ink-muted"> · {agentId}</span>}
+            {agentId && <span className="font-mono text-ink-muted"> · {agentId}</span>}
           </h1>
-          <p className="mt-0.5 text-sm text-ink-muted">
+          <p className="mt-1 max-w-[70ch] text-body text-ink-muted">
             Who talks to whom. Each edge aggregates every event between two
             entities, so volume and suspicion read at a glance.
           </p>
@@ -146,11 +161,11 @@ export default function GraphPage() {
         <div className="flex items-center gap-2">
           {agentId ? (
             <>
-              <label className="text-xs text-ink-faint">Depth</label>
+              <label className="text-micro uppercase text-ink-faint">Depth</label>
               <select
                 value={depth}
                 onChange={(e) => setDepth(Number(e.target.value))}
-                className="rounded border border-edge bg-raised px-2 py-1 text-xs text-ink"
+                className="rounded border border-edge bg-raised px-2 py-1 text-label text-ink transition-colors hover:border-edge-strong"
               >
                 {[1, 2, 3, 4].map((d) => (
                   <option key={d} value={d}>{d} hop{d > 1 ? 's' : ''}</option>
@@ -158,7 +173,7 @@ export default function GraphPage() {
               </select>
               <button
                 onClick={() => navigate('/graph')}
-                className="rounded border border-edge bg-raised px-3 py-1 text-xs text-ink-muted hover:border-accent hover:text-ink"
+                className="rounded border border-edge bg-raised px-3 py-1 text-label text-ink-muted transition-colors hover:border-accent hover:text-ink"
               >
                 View full graph
               </button>
@@ -167,7 +182,7 @@ export default function GraphPage() {
             selectedNode?.type === 'agent' && (
               <button
                 onClick={() => navigate(`/graph/${encodeURIComponent(selectedNode.id)}`)}
-                className="rounded border border-edge bg-raised px-3 py-1 text-xs text-ink-muted hover:border-accent hover:text-ink"
+                className="rounded border border-edge bg-raised px-3 py-1 text-label text-ink-muted transition-colors hover:border-accent hover:text-ink"
               >
                 Scope to {selectedNode.id}
               </button>
@@ -210,7 +225,7 @@ export default function GraphPage() {
               width={size.width}
               height={size.height}
               graphData={graphData}
-              backgroundColor="#181d27"
+              backgroundColor={panel()}
               nodeCanvasObject={drawNode}
               nodePointerAreaPaint={(node, color, ctx) => {
                 ctx.fillStyle = color
@@ -221,13 +236,13 @@ export default function GraphPage() {
               nodeLabel={(n) =>
                 `${n.id} — ${n.type} · ${n.health} · ${n.event_count} initiated, ${n.inbound_count} received`
               }
-              linkColor={(l) => (l.suspicious ? HEALTH_COLOR.suspicious : EDGE_IDLE)}
+              linkColor={(l) => (l.suspicious ? healthColor('suspicious') : edgeIdle())}
               linkWidth={(l) => (l.suspicious ? 2.5 : 1)}
               linkDirectionalArrowLength={4}
               linkDirectionalArrowRelPos={1}
               linkDirectionalParticles={(l) => (l.suspicious ? 3 : 0)}
               linkDirectionalParticleWidth={2.5}
-              linkDirectionalParticleColor={() => HEALTH_COLOR.suspicious}
+              linkDirectionalParticleColor={() => healthColor('suspicious')}
               linkLabel={(l) =>
                 `${l.source.id ?? l.source} → ${l.target.id ?? l.target} · ${l.action_type} · ${l.count} events${
                   l.permissions?.length ? ` · ${l.permissions.join(', ')}` : ''

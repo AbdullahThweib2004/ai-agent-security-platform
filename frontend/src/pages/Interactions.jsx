@@ -7,42 +7,13 @@ import { Empty, ErrorState, Loading } from '../components/States'
 import { useFetch } from '../hooks/useFetch'
 import { getA2ADecision, getA2ADecisions } from '../lib/api'
 import { relativeTime } from '../lib/format'
+import { ClearFilters, FilterBar, SelectFilter, TextFilter } from '../components/Filters'
+import { railClass } from '../lib/ramp'
+import { rampStep } from '../components/StatusBadge'
 
 // Mirrors the API's own filter design: `decision` is a closed set, so it is a
 // dropdown; agent ids are open-ended, so they stay free text.
 const DECISIONS = ['allowed', 'blocked']
-
-function DecisionFilter({ value, onChange }) {
-  return (
-    <label className="flex items-center gap-2 text-xs text-ink-faint">
-      Decision
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded border border-edge bg-raised px-2 py-1 text-xs text-ink"
-      >
-        <option value="">any decision</option>
-        {DECISIONS.map((d) => (
-          <option key={d} value={d}>{d}</option>
-        ))}
-      </select>
-    </label>
-  )
-}
-
-function TextFilter({ label, value, onChange }) {
-  return (
-    <label className="flex items-center gap-2 text-xs text-ink-faint">
-      {label}
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="any agent"
-        className="w-40 rounded border border-edge bg-raised px-2 py-1 text-xs text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-      />
-    </label>
-  )
-}
 
 export default function Interactions() {
   const { decisionId } = useParams()
@@ -90,7 +61,7 @@ export default function Interactions() {
     }
   }, [data, selectedId])
 
-  if (loading && !data) return <Loading label="Loading interactions" />
+  if (loading && !data) return <Loading label="Loading interactions" rows={6} />
   if (error) return <ErrorState message={error} onRetry={reload} />
 
   const rows = data ?? []
@@ -102,8 +73,8 @@ export default function Interactions() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold">Interactions</h1>
-        <p className="mt-0.5 text-sm text-ink-muted">
+        <h1 className="text-title font-semibold">Interactions</h1>
+        <p className="mt-1 max-w-[70ch] text-body text-ink-muted">
           Whether two agents should be talking at all — judged on identity and
           trust, before any question of what authority travels between them.
         </p>
@@ -132,26 +103,35 @@ export default function Interactions() {
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-4 rounded-lg border border-edge bg-panel px-3 py-2">
-        <DecisionFilter value={decision} onChange={setDecision} />
-        <TextFilter label="Requester" value={requesterId} onChange={setRequesterId} />
-        <TextFilter label="Target" value={targetId} onChange={setTargetId} />
-        {hasFilters && (
-          <button
-            onClick={() => {
-              setDecision('')
-              setRequesterId('')
-              setTargetId('')
-            }}
-            className="text-xs text-accent hover:underline"
-          >
-            clear filters
-          </button>
-        )}
-        <span className="ml-auto text-xs text-ink-faint">
-          {rows.length} shown{blocked > 0 && ` · ${blocked} refused`}
-        </span>
-      </div>
+      <FilterBar summary={`${rows.length} shown${blocked > 0 ? ` · ${blocked} refused` : ''}`}>
+        <SelectFilter
+          label="Decision"
+          value={decision}
+          onChange={setDecision}
+          options={DECISIONS}
+          anyLabel="any decision"
+        />
+        <TextFilter
+          label="Requester"
+          value={requesterId}
+          onChange={setRequesterId}
+          placeholder="any agent"
+        />
+        <TextFilter
+          label="Target"
+          value={targetId}
+          onChange={setTargetId}
+          placeholder="any agent"
+        />
+        <ClearFilters
+          show={Boolean(hasFilters)}
+          onClear={() => {
+            setDecision('')
+            setRequesterId('')
+            setTargetId('')
+          }}
+        />
+      </FilterBar>
 
       {rows.length === 0 ? (
         <Empty
@@ -174,28 +154,29 @@ export default function Interactions() {
                       setSelectedId(row.decision_id)
                       navigate(`/interactions/${row.decision_id}`, { replace: true })
                     }}
-                    className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors ${
-                      active ? 'bg-raised' : 'bg-surface hover:bg-panel/70'
-                    }`}
+                    className={`flex w-full items-center gap-3 px-3 py-2.5 text-left ${railClass(
+                      rampStep('interaction', row.decision),
+                      active
+                    )}`}
                   >
                     <StatusBadge kind="interaction" value={row.decision} size="sm" />
                     <span className="min-w-0 flex-1">
-                      <span className="flex flex-wrap items-center gap-x-2 text-sm">
+                      <span className="flex flex-wrap items-center gap-x-2 font-mono text-body">
                         <span className="font-medium">{row.requester_id}</span>
-                        <span className="text-ink-faint">→</span>
+                        <span aria-hidden="true" className="text-ink-faint">→</span>
                         <span className="text-ink-muted">{row.target_id}</span>
                       </span>
-                      <span className="mt-0.5 block truncate text-xs text-ink-muted">
+                      <span className="mt-0.5 block truncate text-label text-ink-muted">
                         {row.reason}
                       </span>
                     </span>
                     {/* The trust that produced the verdict, at a glance. */}
                     <span className="hidden shrink-0 items-center gap-1 xl:flex">
                       <StatusBadge kind="trust" value={row.requester_trust} size="sm" />
-                      <span className="text-ink-faint">→</span>
+                      <span aria-hidden="true" className="text-ink-faint">→</span>
                       <StatusBadge kind="trust" value={row.target_trust} size="sm" />
                     </span>
-                    <span className="whitespace-nowrap text-xs text-ink-faint">
+                    <span className="whitespace-nowrap font-mono text-label text-ink-faint">
                       {relativeTime(row.decided_at)}
                     </span>
                   </button>

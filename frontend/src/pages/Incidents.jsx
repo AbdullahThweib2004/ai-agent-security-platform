@@ -4,6 +4,9 @@ import IncidentDetail from '../components/IncidentDetail'
 import StatTile from '../components/StatTile'
 import StatusBadge from '../components/StatusBadge'
 import { Empty, ErrorState, Loading } from '../components/States'
+import { ClearFilters, FilterBar, SelectFilter, TextFilter } from '../components/Filters'
+import { railClass } from '../lib/ramp'
+import { rampStep } from '../components/StatusBadge'
 import { useFetch } from '../hooks/useFetch'
 import { getIncident, getIncidents } from '../lib/api'
 import { duration, relativeTime } from '../lib/format'
@@ -50,7 +53,7 @@ export default function Incidents() {
     }
   }, [data, selectedId])
 
-  if (loading && !data) return <Loading label="Loading incidents" />
+  if (loading && !data) return <Loading label="Loading incidents" rows={4} />
   if (error) return <ErrorState message={error} onRetry={reload} />
 
   const rows = data ?? []
@@ -60,8 +63,8 @@ export default function Incidents() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold">Incidents</h1>
-        <p className="mt-0.5 text-sm text-ink-muted">
+        <h1 className="text-title font-semibold">Incidents</h1>
+        <p className="mt-1 max-w-[70ch] text-body text-ink-muted">
           Agents contained automatically when independent layers agreed something
           was wrong. Containment opens on its own; only a named operator lifts it.
         </p>
@@ -88,44 +91,23 @@ export default function Incidents() {
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-4 rounded-lg border border-edge bg-panel px-3 py-2">
-        <label className="flex items-center gap-2 text-xs text-ink-faint">
-          Status
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="rounded border border-edge bg-raised px-2 py-1 text-xs text-ink"
-          >
-            <option value="">any status</option>
-            {STATUSES.map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-        </label>
-        <label className="flex items-center gap-2 text-xs text-ink-faint">
-          Agent
-          <input
-            value={agentId}
-            onChange={(e) => setAgentId(e.target.value)}
-            placeholder="any agent"
-            className="w-40 rounded border border-edge bg-raised px-2 py-1 text-xs text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-          />
-        </label>
-        {hasFilters && (
-          <button
-            onClick={() => {
-              setStatusFilter('')
-              setAgentId('')
-            }}
-            className="text-xs text-accent hover:underline"
-          >
-            clear filters
-          </button>
-        )}
-        <span className="ml-auto text-xs text-ink-faint">
-          {rows.length} shown{suspended > 0 && ` · ${suspended} contained`}
-        </span>
-      </div>
+      <FilterBar summary={`${rows.length} shown${suspended > 0 ? ` · ${suspended} contained` : ''}`}>
+        <SelectFilter
+          label="Status"
+          value={statusFilter}
+          onChange={setStatusFilter}
+          options={STATUSES}
+          anyLabel="any status"
+        />
+        <TextFilter label="Agent" value={agentId} onChange={setAgentId} placeholder="any agent" />
+        <ClearFilters
+          show={Boolean(hasFilters)}
+          onClear={() => {
+            setStatusFilter('')
+            setAgentId('')
+          }}
+        />
+      </FilterBar>
 
       {rows.length === 0 ? (
         <Empty
@@ -149,14 +131,15 @@ export default function Incidents() {
                       setSelectedId(row.incident_id)
                       navigate(`/incidents/${row.incident_id}`, { replace: true })
                     }}
-                    className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors ${
-                      active ? 'bg-raised' : 'bg-surface hover:bg-panel/70'
-                    }`}
+                    className={`flex w-full items-center gap-3 px-3 py-2.5 text-left ${railClass(
+                      rampStep('incident', row.status),
+                      active
+                    )}`}
                   >
                     <StatusBadge kind="incident" value={row.status} size="sm" />
                     <span className="min-w-0 flex-1">
-                      <span className="block text-sm font-medium">{row.agent_id}</span>
-                      <span className="mt-0.5 block truncate text-xs text-ink-muted">
+                      <span className="block font-mono text-body font-medium">{row.agent_id}</span>
+                      <span className="mt-0.5 block truncate text-label text-ink-muted">
                         {row.trigger_summary?.reason}
                       </span>
                     </span>
@@ -164,14 +147,14 @@ export default function Incidents() {
                       {layers.map((l) => (
                         <span
                           key={l}
-                          className="rounded bg-raised px-1.5 py-0.5 font-mono text-[10px] text-ink-muted"
+                          className="rounded border border-edge bg-raised px-1.5 py-0.5 font-mono text-micro normal-case tracking-normal text-ink-muted"
                         >
                           {l}
                         </span>
                       ))}
                     </span>
                     {/* Event time vs detection time, at a glance. */}
-                    <span className="whitespace-nowrap text-right text-xs">
+                    <span className="whitespace-nowrap text-right font-mono text-label">
                       <span className="block text-ink-faint">
                         acted {relativeTime(row.opened_at)}
                       </span>
