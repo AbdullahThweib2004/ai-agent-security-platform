@@ -14,6 +14,7 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from app.config import get_settings
 from app.db.neo4j import close_driver, init_constraints, verify_connectivity
 from app.db.postgres import init_db
+from app.db.schema import SchemaNotReady
 from app.logging_config import configure_logging
 from app.routers import (
     a2a,
@@ -35,8 +36,19 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
-    logger.info("postgres schema ready")
+    try:
+        revision = init_db()
+    except SchemaNotReady as exc:
+        # Refuse to start rather than serving until the first query hits a
+        # missing table. A process that comes up healthy and then 500s on real
+        # traffic is harder to diagnose than one that never comes up.
+        logger.critical(
+            "refusing to start: %s",
+            exc,
+            extra={"event": "schema.not_ready", "alert_worthy": True},
+        )
+        raise
+    logger.info("postgres schema ready", extra={"schema_revision": revision})
     verify_connectivity()
     init_constraints()
     logger.info("neo4j schema ready")

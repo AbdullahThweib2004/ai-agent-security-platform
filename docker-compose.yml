@@ -52,7 +52,54 @@ services:
         condition: service_healthy
       neo4j:
         condition: service_healthy
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # Verify before starting uvicorn, in the container's main process.
+    # `--reload` supervises the app in a child, so an app that refuses to start
+    # leaves the reloader running and the container Up while serving nothing.
+    # Checking here means an unmigrated database actually stops the container.
+    command: >
+      sh -c "python scripts/verify_schema.py &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  # Schema is created by migrations, never by the application. `backend` refuses
+  # to start unless the database is already at head, so this runs first on a
+  # fresh stack and after any change that adds a migration.
+  #
+  #   docker compose run --rm migrate
+  #
+  migrate:
+    build: ./backend
+    environment:
+      POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER:-aasec}:${POSTGRES_PASSWORD:-aasec_pw}@postgres:5432/${POSTGRES_DB:-aasec}
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # `run` is the intended entrypoint; this default makes a bare
+    # `docker compose run --rm migrate` do the obvious thing.
+    command: alembic upgrade head
+    profiles: ["tools"]
+
+  # Generate a migration after changing a model:
+  #
+  #   docker compose run --rm migrate-revision "add escalation column"
+  #
+  # Writes into backend/alembic/versions/ as the invoking user, so the file is
+  # not left owned by root. Always read what it generated before committing —
+  # autogenerate is a good first draft, not an authority.
+  migrate-revision:
+    build: ./backend
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER:-aasec}:${POSTGRES_PASSWORD:-aasec_pw}@postgres:5432/${POSTGRES_DB:-aasec}
+      HOME: /tmp
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["alembic", "revision", "--autogenerate", "-m"]
+    profiles: ["tools"]
 
   frontend:
     build: ./frontend

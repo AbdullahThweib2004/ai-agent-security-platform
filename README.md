@@ -261,6 +261,35 @@ deliberate. A wrong auto-suspension stops a legitimate agent until a human looks
 — visible and recoverable. A wrong auto-release lets a compromised agent resume
 silently. Fail toward the noisy error.
 
+## Changing the schema
+
+Every schema change follows the same two steps. Edit the model, then generate a
+migration for it:
+
+```bash
+docker compose run --rm migrate-revision "add escalation column to incidents"
+docker compose run --rm migrate          # apply it locally
+```
+
+Read what autogenerate produced before committing it. It is a good first draft,
+not an authority — it has been known to miss partial-index predicates and server
+defaults, which is why the checks below compare both.
+
+### Why three checks and not one
+
+They fail on different things, and each would pass while another failed:
+
+| Check | Where | Catches |
+|---|---|---|
+| **Startup verification** | `app/db/schema.py`, on boot | A *deployment* running against a database at the wrong revision. Refuses to start rather than 500ing on the first request. |
+| **Drift check** | CI, `scripts/check_schema_drift.py` | A *model changed without a migration*. Builds a database each way and compares every column, constraint and index. |
+| **Migrations job** | CI, `TEST_SCHEMA_MODE=migrate` | A migration that is structurally right but *fails to run*, or produces a schema the app rejects. Runs the whole suite on a migration-built database. |
+
+The middle one is the check whose absence let six schema changes accumulate
+here. The suite builds its schema from the models, so it passed whether or not a
+migration existed — the fast path is still the default locally, and the CI job
+above is what covers the blind spot it leaves.
+
 ## Anomaly rules (rule-based only — no ML in this phase)
 
 | Rule | Fires when |
@@ -292,10 +321,45 @@ how the seeded External Agent scenario surfaces.
 
 ## Running it
 
+The application never creates schema. Migrations do, and `backend` refuses to
+start against a database that is not at the expected revision — so a fresh stack
+is migrate, then run:
+
 ```bash
-cp .env.example .env        # optional; defaults work as-is
-docker compose up --build
+cp .env.example .env                    # optional; defaults work as-is
+
+docker compose up -d --build postgres neo4j
+docker compose run --rm migrate         # alembic upgrade head
+docker compose up -d --build            # everything else
 ```
+
+If you skip the migration, `backend` exits with status 1 and says exactly what is
+wrong and which command to run:
+
+```
+refusing to start: the database has never been migrated and is empty
+(no alembic_version table, no tables). Expected revision e4913d78cd73.
+Run: docker compose run --rm migrate
+```
+
+The check runs twice on purpose. The application performs it during startup,
+which is what protects a real deployment. The dev container *also* runs it
+before launching uvicorn, because `--reload` supervises the app in a child
+process: when the app refuses to start, the reloader keeps waiting for a file
+change and the container stays `Up` while serving nothing. A container that
+looks alive and answers no requests is exactly the failure the check exists to
+prevent.
+
+**Upgrading an older dev stack** built before migrations existed: its tables
+already exist but it has no migration history, so `migrate` would fail on the
+first `CREATE TABLE`. Record it as already current instead:
+
+```bash
+docker compose run --rm --entrypoint "alembic stamp head" migrate
+```
+
+That is safe only because the baseline migration was verified to produce a
+schema identical to the one `create_all` used to build.
 
 | Service | URL |
 |---|---|
@@ -497,7 +561,7 @@ That spins up throwaway databases on their own ports under their own Compose
 project (`aasec-test`), so it never touches the dev stack or its seeded data.
 Postgres runs on tmpfs, so every run starts from nothing.
 
-**495 tests, 99% statement coverage.**
+**502 tests, 99% statement coverage.**
 
 | Area | What is pinned |
 |---|---|
@@ -556,6 +620,16 @@ rather than assumed correct, and each gate was verified by deliberately breaking
 it: a failing assertion, an unused import, bad formatting, an unresolvable
 frontend import, and a failed job feeding the gate. All five failed the build.
 
+**Running `act` locally**: it binds the service containers to the same host
+ports the dev stack uses (5432, 7474, 7687), so stop the dev stack first. And
+when a job *fails*, `act` leaves its service containers running — a deliberately
+failed job (verifying a gate, say) will block the next `docker compose up` with
+a port conflict that looks unrelated. Clean up with:
+
+```bash
+docker rm -f $(docker ps -aq --filter name=act-)
+```
+
 ## Where this stands
 
 All five original phases are complete and verified end-to-end against live data
@@ -569,24 +643,26 @@ and on CI.
 | 4 | A2A Security | 67 interaction decisions; trust hybrid between derived rating and operator assertion |
 | 5 | Incident Response | One agent contained automatically on three-layer corroboration, released only by a named operator |
 
-**495 tests, 99% statement coverage**, all against real Postgres and Neo4j rather
+**502 tests, 99% statement coverage**, all against real Postgres and Neo4j rather
 than mocks. Every policy engine has been mutation-tested: 9 mutations on the
 delegation rules, 7 on interaction policy, 5 on the layering, and 8 on
 containment — all caught, several only after adding the test that isolated them.
 
-### Known outstanding: migrations
+### Migrations
 
-The schema is still created with `create_all`. That is now **six schema changes**
-deep — `graph_projected`, `delegations`, `agent_identities`, `a2a_decisions`,
-nullable identity timestamps, and `incidents` + `incident_events` — and
-`create_all` cannot alter an existing table, so each one has required a manual
-`DROP TABLE` and reseed on the dev stack.
+Resolved. The six accumulated schema changes are consolidated into a single
+verified baseline, and `create_all` no longer runs anywhere outside the test
+suite's fast path.
 
-This has cost nothing so far because none of the data is worth keeping. That
-stops being true the first time this runs anywhere real, and Alembic should land
-before then. The test suite drops and rebuilds from the models on every run, so
-tests cannot drift from the schema — but that is precisely what has kept the
-problem invisible.
+The baseline was not taken on trust: a database built by migrations was compared
+against one built by `create_all` across all 109 columns, constraints and
+indexes, including the partial unique index on `incidents` and the composite key
+on `incident_events` — the two most likely to degrade silently. Identical, with a
+clean `pg_dump` diff and nothing left for autogenerate to do.
+
+A single snapshot rather than six migrations mirroring the history, because no
+database ever existed in an intermediate state. See `## Changing the schema` for
+the workflow and the three checks that now keep models and migrations together.
 
 ## Hardening summary
 
@@ -594,7 +670,7 @@ The MVP is hardened across four areas. Each was verified rather than assumed:
 
 | | Covers | Evidence |
 |---|---|---|
-| **1. Test suite** | Unit, integration and regression tests against **real** Postgres and Neo4j | 495 tests, 99% coverage; mutation-checked — breaking the cold-start threshold, letting suspicious events into baselines, downgrading `blocked`, or swapping `MERGE` for `CREATE` each makes it fail |
+| **1. Test suite** | Unit, integration and regression tests against **real** Postgres and Neo4j | 502 tests, 99% coverage; mutation-checked — breaking the cold-start threshold, letting suspicious events into baselines, downgrading `blocked`, or swapping `MERGE` for `CREATE` each makes it fail |
 | **2. Errors & validation** | Every endpoint audited against bad input; staged-write reconciliation | 38 bad-input cases all return 4xx, none 2xx or 5xx; five real defects found and fixed; the Postgres-committed/graph-failed window asserted as a state transition and healed |
 | **3. CI** | ruff, black, full suite against pinned service containers, frontend build, behind one required gate | Green on GitHub; every gate verified by deliberately breaking it on a throwaway branch |
 | **4. Observability** | JSON structured logging across the ingest path; real dependency health checks | Logs verified on a live stack; `/health` returns 503 in ~18ms naming the specific dead store; tests assert sensitive metadata never reaches logs |
@@ -604,9 +680,9 @@ Known limitations, recorded rather than hidden:
 - **Cold start** — an agent with fewer than 3 clean events is `unrated`, not
   judged. Documented above; surfaced distinctly in the UI so it is never
   mistaken for a clean bill of health.
-- **No migrations** — the schema is created with `create_all`. Two changes so
-  far have needed a manual `DROP TABLE` and reseed in development. Alembic is
-  worth adding before there is data worth keeping.
+- **Migrations** — resolved. Alembic manages the schema; the application
+  verifies the revision on startup and refuses to run against a mismatch, and CI
+  fails if a model changes without a migration.
 
 ## Build status
 

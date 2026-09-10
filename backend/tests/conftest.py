@@ -8,6 +8,7 @@ services); both point the same env vars at throwaway instances.
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -16,7 +17,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from app.db.neo4j import close_driver, get_driver, init_constraints
-from app.db.postgres import SessionLocal, engine, init_db
+from app.db.postgres import SessionLocal, create_all_for_tests, engine
+from app.db.schema import stamp_head, upgrade_to_head
 from app.main import app
 from app.models.base import Base
 
@@ -25,16 +27,42 @@ BASE_TIME = datetime(2026, 3, 2, 9, 0, tzinfo=UTC)
 
 @pytest.fixture(scope="session", autouse=True)
 def _schema():
-    """Rebuild the schema from the models on every run.
+    """Build the schema once per session, one of two ways.
 
-    The test databases are throwaway, and ``create_all`` will not alter an
-    existing table — so dropping first is what keeps the suite honest when a
-    column is added or changed.
+    ``TEST_SCHEMA_MODE=create_all`` (the default) builds straight from the
+    models and stamps the revision. It is fast, and it is what local runs use.
+    It also cannot fail when a migration is broken — building from the models
+    never touches the migration at all. That blind spot is precisely how six
+    unmigrated schema changes accumulated here.
+
+    ``TEST_SCHEMA_MODE=migrate`` runs ``alembic upgrade head`` instead, so the
+    entire suite executes against a schema the migrations actually produced. CI
+    runs both: the fast path for the ordinary matrix, and this one as a separate
+    job, so a migration that is structurally correct but fails to *run* is
+    caught before it reaches anyone.
     """
     import app.models  # noqa: F401  (registers every model on Base)
 
+    mode = os.environ.get("TEST_SCHEMA_MODE", "create_all")
+
     Base.metadata.drop_all(bind=engine)
-    init_db()
+    with engine.begin() as connection:
+        connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+
+    if mode == "migrate":
+        upgrade_to_head(engine)
+    elif mode == "create_all":
+        create_all_for_tests()
+        # The application refuses to start against a database with no migration
+        # history, and the TestClient boots the real app. Stamping records what
+        # is already true — the baseline was verified identical to what
+        # create_all produces — rather than working around the check.
+        stamp_head(engine)
+    else:
+        raise RuntimeError(
+            f"unknown TEST_SCHEMA_MODE {mode!r}; expected 'create_all' or 'migrate'"
+        )
+
     init_constraints()
     yield
     close_driver()
