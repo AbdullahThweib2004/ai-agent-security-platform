@@ -9,20 +9,39 @@
 // The rail is a mark, not text, so the 3:1 `critical` step is the correct one
 // here — `critical-ink` is reserved for red type.
 
-const RAIL = {
-  critical: 'border-l-status-critical bg-status-critical/[0.07] hover:bg-status-critical/[0.12]',
-  serious: 'border-l-status-serious hover:bg-raised',
-  warning: 'border-l-status-warning hover:bg-raised',
-  good: 'border-l-transparent hover:bg-raised',
-  neutral: 'border-l-transparent hover:bg-raised',
-  // What the analyst is doing outranks what the data says, so a selected row
-  // shows the accent instead of its severity.
-  selected: 'border-l-accent bg-raised',
+// The resting look, without any interaction state.
+const TONE = {
+  critical: 'border-l-status-critical bg-status-critical/[0.07]',
+  serious: 'border-l-status-serious',
+  warning: 'border-l-status-warning',
+  good: 'border-l-transparent',
+  neutral: 'border-l-transparent',
 }
 
-/** Row classes for a ramp step. Pass `selected` to override with the accent. */
+const HOVER = {
+  critical: 'hover:bg-status-critical/[0.12]',
+  serious: 'hover:bg-raised',
+  warning: 'hover:bg-raised',
+  good: 'hover:bg-raised',
+  neutral: 'hover:bg-raised',
+}
+
+// What the analyst is doing outranks what the data says, so a selected row
+// shows the accent instead of its severity.
+const SELECTED = 'border-l-accent bg-raised'
+
+/** Row classes for a ramp step. Pass `selected` to override with the accent.
+ *  For rows the analyst can click — the default across the list views. */
 export function railClass(step, selected = false) {
-  return `border-l-[3px] transition-colors ${selected ? RAIL.selected : RAIL[step] ?? RAIL.neutral}`
+  const key = step in TONE ? step : 'neutral'
+  const rest = selected ? SELECTED : `${TONE[key]} ${HOVER[key]}`
+  return `border-l-[3px] transition-colors ${rest}`
 }
 
-export default RAIL
+/** The same rail without a hover state, for rows that are not interactive —
+ *  a verdict being reported rather than a row to open. */
+export function railTone(step) {
+  return `border-l-[3px] ${TONE[step in TONE ? step : 'neutral']}`
+}
+
+export default TONE
