@@ -1,9 +1,9 @@
 import StatusBadge from './StatusBadge'
 import { ENTITY_ICON, clockTime, money } from '../lib/format'
-import { healthColor, status, edgeIdle } from '../lib/palette'
+import { status, edgeIdle } from '../lib/palette'
 
 const RELATION = {
-  self: { label: 'the event you asked about', cls: 'border-accent/60 bg-accent/10 text-accent' },
+  self: { label: 'the event you asked about', cls: 'border-accent/60 bg-accent/10 text-accent-ink' },
   ancestor: { label: 'led to it', cls: 'border-edge bg-raised text-ink-muted' },
   descendant: { label: 'caused by it', cls: 'border-edge bg-raised text-ink-muted' },
   related: { label: 'same incident, other branch', cls: 'border-status-warning/50 bg-status-warning/10 text-status-warning' },
@@ -40,26 +40,25 @@ export default function TimelineEntry({ entry, isLast }) {
             isSelf ? 'border-accent/50 bg-accent/5' : 'border-edge bg-panel'
           }`}
         >
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-            <span className="tabular text-xs text-ink-faint">{clockTime(event.timestamp)}</span>
-            <span className="flex items-center gap-1.5 font-medium">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-body">
+            <span className="tabular font-mono text-label text-ink-faint">{clockTime(event.timestamp)}</span>
+            <span className="flex items-center gap-1.5 font-mono font-medium">
               <span aria-hidden="true" className="text-ink-faint">{ENTITY_ICON[event.actor_type]}</span>
               {event.actor_id}
             </span>
-            <span className="font-mono text-xs text-ink-faint">—{event.action_type}→</span>
-            <span className="flex items-center gap-1.5 text-ink-muted">
+            <span aria-hidden="true" className="font-mono text-label text-ink-faint">—{event.action_type}→</span>
+            <span className="flex items-center gap-1.5 font-mono text-ink-muted">
               <span aria-hidden="true" className="text-ink-faint">{ENTITY_ICON[event.target_type]}</span>
               {event.target_id}
             </span>
             <span className="ml-auto flex items-center gap-2">
               {amount != null && (
                 <span
-                  className="tabular text-label font-medium text-ink-muted"
-                  style={{
-                    color: alerts.some((a) => a.rule_name === 'value_excursion')
-                      ? healthColor('suspicious')
-                      : undefined,
-                  }}
+                  className={`tabular font-mono text-label font-medium ${
+                    alerts.some((a) => a.rule_name === 'value_excursion')
+                      ? 'text-status-critical-ink'
+                      : 'text-ink-muted'
+                  }`}
                 >
                   {money(amount)}
                 </span>
@@ -69,14 +68,14 @@ export default function TimelineEntry({ entry, isLast }) {
           </div>
 
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <span className={`rounded border px-1.5 py-0.5 text-[11px] ${rel.cls}`}>
+            <span className={`rounded border px-1.5 py-0.5 text-micro normal-case tracking-normal ${rel.cls}`}>
               {rel.label}
             </span>
-            <span className="text-[11px] text-ink-faint">depth {depth}</span>
+            <span className="font-mono text-micro normal-case tracking-normal text-ink-faint">depth {depth}</span>
             {event.permissions_used?.length > 0 && (
               <span className="flex flex-wrap gap-1">
                 {event.permissions_used.map((p) => (
-                  <span key={p} className="rounded bg-raised px-1.5 py-0.5 font-mono text-[11px] text-ink-muted">
+                  <span key={p} className="rounded border border-edge bg-raised px-1.5 py-0.5 font-mono text-micro normal-case tracking-normal text-ink-muted">
                     {p}
                   </span>
                 ))}
@@ -89,14 +88,14 @@ export default function TimelineEntry({ entry, isLast }) {
               {alerts.map((a) => (
                 <li key={a.alert_id} className="flex items-start gap-2">
                   <StatusBadge kind="severity" value={a.severity} size="sm" />
-                  <span className="text-xs text-ink-muted">{a.details?.reason}</span>
+                  <span className="text-label text-ink-muted">{a.details?.reason}</span>
                 </li>
               ))}
             </ul>
           )}
 
           {event.reported_status !== event.platform_status && (
-            <p className="mt-2 text-[11px] text-status-serious">
+            <p className="mt-2 text-micro normal-case tracking-normal text-status-serious">
               Caller reported this as “{event.reported_status}”; the platform
               graded it “{event.platform_status}”.
             </p>

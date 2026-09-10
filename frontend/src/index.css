@@ -30,7 +30,10 @@
 
   /* Reserved for what the analyst is doing — focus, selection, links.
      Never a status, never a series colour. */
-  --accent: 57 135 229;   /* #3987e5   5.02:1 */
+  --accent: 57 135 229;      /* #3987e5   5.02:1 — mark step */
+  --accent-ink: 92 157 240;  /* #5c9df0   the text step, for accent type on an
+                                accent-tinted ground where the mark step only
+                                reaches 4.10:1 */
 
   /* The attention ramp. Fixed, never themed, never reused as a series colour;
      always shipped with an icon + label so hue is never the only signal. */

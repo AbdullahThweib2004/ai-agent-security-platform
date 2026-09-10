@@ -29,7 +29,7 @@ export default {
           critical: token('status-critical'),
           'critical-ink': token('status-critical-ink'),
         },
-        accent: token('accent'),
+        accent: { DEFAULT: token('accent'), ink: token('accent-ink') },
       },
       fontFamily: {
         sans: ['Inter Variable', 'Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],

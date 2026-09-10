@@ -39,7 +39,7 @@ function renderValue(key, value) {
     return (
       <div className="flex flex-wrap justify-end gap-1">
         {value.map((v) => (
-          <span key={v} className="rounded bg-raised px-1.5 py-0.5 font-mono text-[11px]">
+          <span key={v} className="rounded bg-raised px-1.5 py-0.5 font-mono text-micro normal-case tracking-normal">
             {v}
           </span>
         ))}
@@ -54,7 +54,7 @@ function renderValue(key, value) {
 export default function AlertDetail({ alert }) {
   if (!alert)
     return (
-      <div className="rounded-lg border border-dashed border-edge bg-panel p-6 text-center text-xs text-ink-faint">
+      <div className="rounded-lg border border-dashed border-edge bg-panel p-6 text-center text-label text-ink-faint">
         Select an alert to see the evidence behind it.
       </div>
     )
@@ -70,25 +70,25 @@ export default function AlertDetail({ alert }) {
     <div className="space-y-4 rounded-lg border border-edge bg-panel p-4">
       <div>
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold">
+          <h2 className="text-heading font-semibold">
             {RULE_TITLE[alert.rule_name] ?? alert.rule_name}
           </h2>
           <StatusBadge kind="severity" value={alert.severity} size="sm" />
         </div>
-        <p className="mt-2 text-xs leading-relaxed text-ink-muted">{reason}</p>
-        <div className="mt-2 text-[11px] text-ink-faint">
-          Triggered {shortTime(alert.triggered_at)} · rule{' '}
+        <p className="mt-2 text-label leading-relaxed text-ink-muted">{reason}</p>
+        <div className="mt-2 text-micro normal-case tracking-normal text-ink-faint">
+          Triggered <span className="font-mono">{shortTime(alert.triggered_at)}</span> · rule{' '}
           <span className="font-mono">{alert.rule_name}</span>
         </div>
       </div>
 
       <div className="border-t border-edge pt-3">
-        <div className="mb-2 text-xs font-semibold text-ink-muted">Evidence</div>
+        <div className="mb-2 text-heading font-semibold text-ink-muted">Evidence</div>
         <dl className="space-y-1.5">
           {ordered.map((key) => (
             <div key={key} className="flex items-start justify-between gap-4">
-              <dt className="text-xs text-ink-faint">{EVIDENCE_LABELS[key] ?? key}</dt>
-              <dd className="tabular max-w-[60%] text-right text-xs text-ink-muted">
+              <dt className="text-label text-ink-faint">{EVIDENCE_LABELS[key] ?? key}</dt>
+              <dd className="tabular max-w-[60%] text-right font-mono text-label text-ink-muted">
                 {renderValue(key, evidence[key])}
               </dd>
             </div>
@@ -97,15 +97,15 @@ export default function AlertDetail({ alert }) {
       </div>
 
       <div className="border-t border-edge pt-3">
-        <div className="mb-2 text-xs font-semibold text-ink-muted">Triggering event</div>
-        <div className="flex flex-wrap items-center gap-2 text-xs">
+        <div className="mb-2 text-heading font-semibold text-ink-muted">Triggering event</div>
+        <div className="flex flex-wrap items-center gap-2 font-mono text-label">
           <span className="flex items-center gap-1.5">
             <span aria-hidden="true" className="text-ink-faint">
               {ENTITY_ICON[event.actor_type]}
             </span>
             {event.actor_id}
           </span>
-          <span className="text-ink-faint">—{event.action_type}→</span>
+          <span aria-hidden="true" className="text-ink-faint">—{event.action_type}→</span>
           <span className="flex items-center gap-1.5">
             <span aria-hidden="true" className="text-ink-faint">
               {ENTITY_ICON[event.target_type]}
@@ -115,23 +115,23 @@ export default function AlertDetail({ alert }) {
         </div>
         <dl className="mt-2 space-y-1.5">
           <div className="flex justify-between gap-4">
-            <dt className="text-xs text-ink-faint">Caller reported</dt>
+            <dt className="text-label text-ink-faint">Caller reported</dt>
             <dd><StatusBadge kind="status" value={event.reported_status} size="sm" /></dd>
           </div>
           <div className="flex justify-between gap-4">
-            <dt className="text-xs text-ink-faint">Platform verdict</dt>
+            <dt className="text-label text-ink-faint">Platform verdict</dt>
             <dd><StatusBadge kind="status" value={event.platform_status} size="sm" /></dd>
           </div>
           <div className="flex justify-between gap-4">
-            <dt className="text-xs text-ink-faint">Occurred</dt>
-            <dd className="text-xs text-ink-muted">{shortTime(event.timestamp)}</dd>
+            <dt className="text-label text-ink-faint">Occurred</dt>
+            <dd className="font-mono text-label text-ink-muted">{shortTime(event.timestamp)}</dd>
           </div>
         </dl>
 
         {Object.keys(event.metadata ?? {}).length > 0 && (
           <div className="mt-3">
-            <div className="mb-1 text-xs text-ink-faint">Event metadata</div>
-            <pre className="overflow-x-auto rounded border border-edge bg-surface p-2 font-mono text-[11px] leading-relaxed text-ink-muted">
+            <div className="mb-1 text-micro uppercase text-ink-faint">Event metadata</div>
+            <pre className="overflow-x-auto rounded border border-edge bg-surface p-2 font-mono text-micro normal-case tracking-normal leading-relaxed text-ink-muted">
 {JSON.stringify(event.metadata, null, 2)}
             </pre>
           </div>
@@ -140,7 +140,7 @@ export default function AlertDetail({ alert }) {
 
       <Link
         to={`/forensics/${event.event_id}`}
-        className="block rounded border border-edge bg-raised px-3 py-2 text-center text-xs text-ink-muted hover:border-accent hover:text-ink"
+        className="block rounded border border-edge bg-raised px-3 py-2 text-center text-label font-medium text-ink-muted transition-colors hover:border-accent hover:text-ink"
       >
         Investigate in Forensics →
       </Link>

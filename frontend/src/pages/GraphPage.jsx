@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import ForceGraph2D from 'react-force-graph-2d'
 import EntityDetail from '../components/EntityDetail'
 import GraphLegend from '../components/GraphLegend'
+import { FIELD } from '../components/Filters'
 import StatTile from '../components/StatTile'
 import { Empty, ErrorState, Loading } from '../components/States'
 import { useFetch } from '../hooks/useFetch'
@@ -165,7 +166,7 @@ export default function GraphPage() {
               <select
                 value={depth}
                 onChange={(e) => setDepth(Number(e.target.value))}
-                className="rounded border border-edge bg-raised px-2 py-1 text-label text-ink transition-colors hover:border-edge-strong"
+                className={FIELD}
               >
                 {[1, 2, 3, 4].map((d) => (
                   <option key={d} value={d}>{d} hop{d > 1 ? 's' : ''}</option>
