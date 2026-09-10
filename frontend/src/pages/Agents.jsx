@@ -5,6 +5,7 @@ import { Empty, ErrorState, Loading } from '../components/States'
 import { useFetch } from '../hooks/useFetch'
 import { getGraph, getIncidents } from '../lib/api'
 import { ENTITY_ICON, compactNumber, relativeTime } from '../lib/format'
+import { railClass } from '../lib/ramp'
 
 export default function Agents() {
   const { data, error, loading, reload } = useFetch(getGraph, [])
@@ -37,8 +38,8 @@ export default function Agents() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-lg font-semibold">Agents</h1>
-        <p className="mt-0.5 text-sm text-ink-muted">
+        <h1 className="text-title font-semibold">Agents</h1>
+        <p className="mt-1 max-w-[70ch] text-body text-ink-muted">
           Every autonomous agent observed, graded on this platform's own verdict —
           not on what the agent reported about itself.
         </p>
@@ -82,39 +83,35 @@ export default function Agents() {
         />
       ) : (
         <div className="overflow-hidden rounded-lg border border-edge">
-          <table className="w-full text-sm">
-            <thead className="bg-panel text-left text-xs uppercase tracking-wide text-ink-faint">
+          <table className="w-full text-body">
+            <thead className="bg-panel text-left text-micro uppercase text-ink-faint">
               <tr>
-                <th className="px-4 py-2.5 font-medium">Agent</th>
-                <th className="px-4 py-2.5 font-medium">Status</th>
-                <th className="px-4 py-2.5 text-right font-medium">Alerts</th>
-                <th className="px-4 py-2.5 text-right font-medium">Initiated</th>
-                <th className="px-4 py-2.5 text-right font-medium">Received</th>
-                <th className="px-4 py-2.5 font-medium">Last seen</th>
-                <th className="px-4 py-2.5" />
+                <th className="px-3 py-2 font-semibold">Agent</th>
+                <th className="px-3 py-2 font-semibold">Status</th>
+                <th className="px-3 py-2 text-right font-semibold">Alerts</th>
+                <th className="px-3 py-2 text-right font-semibold">Initiated</th>
+                <th className="px-3 py-2 text-right font-semibold">Received</th>
+                <th className="px-3 py-2 font-semibold">Last seen</th>
+                <th className="px-3 py-2" />
               </tr>
             </thead>
             <tbody className="divide-y divide-edge bg-surface">
               {agents.map((a) => (
-                <tr key={a.id} className="transition-colors hover:bg-panel/70">
-                  <td className="px-4 py-3">
+                <tr
+                  key={a.id}
+                  className={railClass(
+                    a.health === 'suspicious' ? 'critical' : a.health === 'unrated' ? 'warning' : 'good'
+                  )}
+                >
+                  <td className="px-3 py-2.5">
                     <div className="flex items-center gap-2">
-                      <span
-                        aria-hidden="true"
-                        className={
-                          a.health === 'suspicious'
-                            ? 'text-status-critical'
-                            : a.health === 'unrated'
-                              ? 'text-status-serious'
-                              : 'text-ink-faint'
-                        }
-                      >
+                      <span aria-hidden="true" className="text-ink-faint">
                         {ENTITY_ICON.agent}
                       </span>
-                      <span className="font-medium">{a.id}</span>
+                      <span className="font-mono font-medium">{a.id}</span>
                     </div>
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2.5">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <StatusBadge kind="health" value={a.health} />
                       {containedBy[a.id] && (
@@ -127,32 +124,32 @@ export default function Agents() {
                       )}
                     </div>
                   </td>
-                  <td className="tabular px-4 py-3 text-right">
+                  <td className="tabular px-3 py-2.5 text-right font-mono">
                     {a.alert_count > 0 ? (
-                      <span className="font-medium text-status-critical">{a.alert_count}</span>
+                      <span className="font-medium text-status-critical-ink">{a.alert_count}</span>
                     ) : (
                       <span className="text-ink-faint">0</span>
                     )}
                   </td>
-                  <td className="tabular px-4 py-3 text-right text-ink-muted">
+                  <td className="tabular px-3 py-2.5 text-right font-mono text-ink-muted">
                     {compactNumber(a.event_count)}
                   </td>
-                  <td className="tabular px-4 py-3 text-right text-ink-muted">
+                  <td className="tabular px-3 py-2.5 text-right font-mono text-ink-muted">
                     {compactNumber(a.inbound_count)}
                   </td>
-                  <td className="px-4 py-3 text-ink-muted">
+                  <td className="px-3 py-2.5 font-mono text-label text-ink-muted">
                     {relativeTime(a.last_seen)}
                     {a.health === 'unrated' && (
-                      <div className="text-[11px] text-status-serious">
+                      <div className="text-micro normal-case tracking-normal text-status-warning">
                         only {a.clean_event_count} clean event
                         {a.clean_event_count === 1 ? '' : 's'}
                       </div>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-3 py-2.5 text-right">
                     <Link
                       to={`/graph/${encodeURIComponent(a.id)}`}
-                      className="rounded border border-edge px-2 py-1 text-xs text-ink-muted hover:border-accent hover:text-ink"
+                      className="rounded border border-edge px-2 py-1 text-label text-ink-muted transition-colors hover:border-accent hover:text-ink"
                     >
                       Inspect
                     </Link>
@@ -166,17 +163,17 @@ export default function Agents() {
 
       {others.length > 0 && (
         <div>
-          <h2 className="text-sm font-semibold text-ink-muted">Other entities</h2>
+          <h2 className="text-heading font-semibold text-ink-muted">Other entities</h2>
           <div className="mt-2 flex flex-wrap gap-2">
             {others.map((n) => (
               <span
                 key={n.id}
-                className="inline-flex items-center gap-2 rounded-md border border-edge bg-panel px-2.5 py-1.5 text-xs"
+                className="inline-flex items-center gap-2 rounded-md border border-edge bg-panel px-2.5 py-1.5 text-label"
                 title={`${n.event_count} initiated · ${n.inbound_count} received`}
               >
                 <span aria-hidden="true" className="text-ink-faint">{ENTITY_ICON[n.type] ?? '·'}</span>
-                <span>{n.id}</span>
-                <span className="text-ink-faint">{n.type}</span>
+                <span className="font-mono">{n.id}</span>
+                <span className="text-micro uppercase text-ink-faint">{n.type}</span>
               </span>
             ))}
           </div>

@@ -361,6 +361,22 @@ docker compose run --rm --entrypoint "alembic stamp head" migrate
 That is safe only because the baseline migration was verified to produce a
 schema identical to the one `create_all` used to build.
 
+**Upgrading an older dev stack after a frontend dependency change** — fonts, for
+instance. The frontend's `node_modules` is an anonymous volume, and Compose
+carries anonymous volumes over when it recreates a container, so a plain
+`docker compose up -d` keeps serving the *old* tree even after `--build`
+produces a new image. Nothing errors; the UI just silently falls back to system
+fonts, which is the same failure mode that let `Inter` sit declared-but-unloaded
+for months. Recreate the volume explicitly:
+
+```bash
+docker compose up -d --build --renew-anon-volumes frontend
+```
+
+The container installs at image-build time and has no DNS at runtime, so
+`docker compose exec frontend npm install` fails with `EAI_AGAIN` — the rebuild
+above is the supported path.
+
 | Service | URL |
 |---|---|
 | Dashboard | http://localhost:5173 |
